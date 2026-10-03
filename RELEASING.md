@@ -68,7 +68,16 @@ and give it a branch, tag or commit.
 ## Publishing
 
 Merging the release pull request creates the `vX.Y.Z` tag and GitHub release.
-The `android` job then checks out that exact commit and:
+
+If the tagged commit has exactly the same files as the release pull request's
+head (the usual case: Release Please keeps its branch up to date with `main`),
+the `reuse` job ships the APK CI built for that pull request instead of
+building again. It finds the build artifact by git tree hash. Before attaching
+it, the job checks that the APK is signed only by the upload key, has app id
+`xyz.pontmore.pontspark`, and has the release's version. Artifacts are kept for
+14 days, so a release pull request merged later than that is rebuilt.
+
+Otherwise the `android` job checks out the tagged commit and:
 
 1. installs locked dependencies, type-checks and runs the tests;
 2. generates the native project with `EXPO_PUBLIC_APP_ENV=production`
@@ -84,10 +93,10 @@ The Android `versionCode` comes from the version (`1.2.3` → `1002003`), so eac
 release installs over the previous one.
 
 If the build fails, do not move or recreate the tag. For a transient failure
-(runner, network, a missing secret), re-run the failed `android` job from the
-release's workflow run; it rebuilds the tagged commit and re-uploads with
-`--clobber`. If the tagged code itself can't build, land a `fix:` on `main`
-and ship it as the next patch release.
+(runner, network, a missing secret), re-run the failed `reuse` or `android`
+job from the release's workflow run; it re-uploads with `--clobber`. If the
+tagged code itself can't build, land a `fix:` on `main` and ship it as the
+next patch release.
 
 ## Building a release APK locally
 
