@@ -3,6 +3,8 @@ name: Android
 # Builds the signed production APK. Release runs attach it to the GitHub
 # release; release pull requests (and manual runs) upload it as a workflow
 # artifact, so a release can be built and installed before it is merged.
+# The artifact is named after the source tree, so the release can reuse it
+# when the merged commit has exactly the same contents (see release.yml).
 
 on:
   workflow_call:
@@ -45,6 +47,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Identify the source tree
+        id: source
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v7
         with:
@@ -116,7 +122,7 @@ jobs:
         if: ${{ inputs.tag == '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.apk.outputs.name }}
+          name: pontspark-apk-${{ steps.source.outputs.tree }}
           path: |
             ${{ steps.apk.outputs.name }}
             ${{ steps.apk.outputs.name }}.sha256

@@ -30,9 +30,91 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  android:
+  # When the release commit has the same contents as the release pull
+  # request's head, ship the APK CI already built and tested for it.
+  reuse:
     needs: release
     if: ${{ needs.release.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      reused: ${{ steps.find.outputs.run_id != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.release_sha }}
+
+      - name: Find an APK built from this source tree
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=pontspark-apk-$tree&per_page=20" --jq "
+            [.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == $REPO_ID)]
+            | sort_by(.created_at) | last | .workflow_run.id // empty")
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          if [ -n "$run_id" ]; then
+            echo "Reusing the APK from run $run_id ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id)"
+          else
+            echo "::notice::No APK was built from tree $tree; building the release from the tag"
+          fi
+
+      - name: Download the APK
+        if: ${{ steps.find.outputs.run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.find.outputs.run_id }}
+          TREE: ${{ steps.find.outputs.tree }}
+        run: |
+          gh run download "$RUN_ID" --name "pontspark-apk-$TREE" --dir "$RUNNER_TEMP/prebuilt"
+          cd "$RUNNER_TEMP/prebuilt"
+          sha256sum --check *.sha256
+
+      - name: Verify the APK is ours and matches the release
+        if: ${{ steps.find.outputs.run_id != '' }}
+        env:
+          KEYSTORE: ${{ secrets.PONTSPARK_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.PONTSPARK_STORE_PASSWORD }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          apk=$(ls "$RUNNER_TEMP"/prebuilt/*.apk)
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+
+          echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
+          expected=$(keytool -exportcert -keystore "$RUNNER_TEMP/upload.keystore" -storepass:env STORE_PASSWORD -alias pontspark | sha256sum | cut -d' ' -f1)
+          rm -f "$RUNNER_TEMP/upload.keystore"
+
+          "$tools/apksigner" verify --print-certs "$apk" | tee signature.txt
+          signers=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest' signature.txt)
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' signature.txt)
+          if [ "$signers" != 1 ] || [ "$actual" != "$expected" ]; then
+            echo "::error::APK is not signed by the upload key alone"; exit 1
+          fi
+
+          "$tools/aapt2" dump badging "$apk" | head -1 | tee badging.txt
+          grep -q "name='xyz.pontmore.pontspark'" badging.txt || { echo "::error::Wrong application id"; exit 1; }
+          grep -q "versionName='$VERSION'" badging.txt || { echo "::error::APK is not version $VERSION"; exit 1; }
+
+      - name: Attach the APK to the release
+        if: ${{ steps.find.outputs.run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag_name }}
+        run: |
+          apk="pontspark-$TAG.apk"
+          cp "$RUNNER_TEMP"/prebuilt/*.apk "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+          gh release upload "$TAG" "$apk" "$apk.sha256" --clobber
+
+  # Otherwise build the APK from the tag.
+  android:
+    needs: [release, reuse]
+    if: ${{ needs.release.outputs.release_created == 'true' && needs.reuse.outputs.reused != 'true' }}
     permissions:
       contents: write
     uses: ./.github/workflows/android.yml

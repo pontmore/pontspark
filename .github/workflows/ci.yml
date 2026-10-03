@@ -36,7 +36,7 @@ jobs:
   # Release pull requests build the exact APK the release will ship, signed
   # with the upload key, so a broken build is caught before the tag exists.
   android:
-    if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--') }}
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-please--') }}
     needs: check
     permissions:
       contents: read
