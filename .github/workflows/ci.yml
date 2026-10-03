@@ -32,3 +32,15 @@ jobs:
           done
       - run: npm run typecheck
       - run: npm test
+
+  # Release pull requests build the exact APK the release will ship, signed
+  # with the upload key, so a broken build is caught before the tag exists.
+  android:
+    if: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--') }}
+    needs: check
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+    secrets: inherit

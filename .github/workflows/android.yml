@@ -1,0 +1,124 @@
+name: Android
+
+# Builds the signed production APK. Release runs attach it to the GitHub
+# release; release pull requests (and manual runs) upload it as a workflow
+# artifact, so a release can be built and installed before it is merged.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build
+        type: string
+        required: true
+      tag:
+        description: Release tag to attach the APK to; empty uploads a workflow artifact
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build
+        type: string
+        required: true
+        default: main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_APP_ENV: production
+      EXPO_PUBLIC_BREEZ_API_KEY: ${{ secrets.BREEZ_API_KEY }}
+      EXPO_PUBLIC_BREEZ_NETWORK: mainnet
+    steps:
+      - name: Require release secrets
+        env:
+          KEYSTORE: ${{ secrets.PONTSPARK_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.PONTSPARK_STORE_PASSWORD }}
+        run: |
+          missing=0
+          for name in EXPO_PUBLIC_BREEZ_API_KEY KEYSTORE STORE_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Missing release secret for $name"; missing=1; fi
+          done
+          exit $missing
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Generate the native Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Install the upload key
+        env:
+          KEYSTORE: ${{ secrets.PONTSPARK_KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
+
+      # Fails in seconds on a wrong password or alias, before the long build.
+      - name: Check the upload key
+        env:
+          STORE_PASSWORD: ${{ secrets.PONTSPARK_STORE_PASSWORD }}
+        run: keytool -list -keystore "$RUNNER_TEMP/upload.keystore" -storepass:env STORE_PASSWORD -alias pontspark
+
+      - name: Build the release APK
+        working-directory: android
+        env:
+          ORG_GRADLE_PROJECT_PONTSPARK_UPLOAD_STORE_FILE: ${{ runner.temp }}/upload.keystore
+          ORG_GRADLE_PROJECT_PONTSPARK_UPLOAD_STORE_PASSWORD: ${{ secrets.PONTSPARK_STORE_PASSWORD }}
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --no-daemon
+
+      - name: Remove the upload key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.keystore"
+
+      - name: Verify the signature
+        run: |
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs android/app/build/outputs/apk/release/app-release.apk | tee signature.txt
+          if grep -q "CN=Android Debug" signature.txt; then echo "::error::APK is debug-signed"; exit 1; fi
+
+      - name: Name the APK
+        id: apk
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          name="pontspark-${TAG:-v$version-$(git rev-parse --short HEAD)}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$name"
+          sha256sum "$name" > "$name.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the APK to the release
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          APK: ${{ steps.apk.outputs.name }}
+        run: gh release upload "$TAG" "$APK" "$APK.sha256" --clobber
+
+      - name: Upload the APK as a workflow artifact
+        if: ${{ inputs.tag == '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: |
+            ${{ steps.apk.outputs.name }}
+            ${{ steps.apk.outputs.name }}.sha256
+          retention-days: 14
+          if-no-files-found: error
