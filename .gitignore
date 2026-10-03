@@ -4,5 +4,6 @@ dist/
 android/
 ios/
 *.keystore
+*.keystore.b64
 .env
 .env.local
