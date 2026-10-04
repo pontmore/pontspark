@@ -6,6 +6,7 @@ import QRCode from "react-qr-code";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { create } from "zustand";
 
+import { errorText } from "../lib/errors";
 import { radius, space, useColors } from "./theme";
 import { Text, tap, success } from "./components";
 
@@ -133,7 +134,7 @@ export function toast(msg: string, kind: ToastKind = "info") {
 }
 
 export function toastError(e: unknown) {
-  toast(e instanceof Error ? e.message : String(e), "error");
+  toast(errorText(e), "error");
 }
 
 export function ToastHost() {

@@ -13,13 +13,13 @@ import {
   Network,
   OnchainConfirmationSpeed,
   PaymentDetails,
-  PaymentDetailsFilter,
   PaymentMethod,
   PaymentRequest,
   PaymentStatus,
   PaymentType,
   ReceivePaymentMethod,
   Seed,
+  SendPaymentMethod,
   SendPaymentOptions,
   SparkHtlcStatus,
   type BreezSdkInterface,
@@ -433,29 +433,47 @@ export function idempotencyUuid(seed: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-export async function lockHtlc(params: {
-  sparkAddress: string;
+/** Recipient side of the escrow: a hold invoice the provider's payment will wait in. */
+export async function holdInvoice(params: { amountSats: bigint; paymentHash: string; expirySecs: number; description: string }): Promise<string> {
+  const s = await connect();
+  const res = await s.receivePayment({
+    paymentMethod: new ReceivePaymentMethod.Bolt11Invoice({
+      description: params.description,
+      amountSats: params.amountSats,
+      expirySecs: Math.max(60, Math.floor(params.expirySecs)),
+      paymentHash: params.paymentHash,
+      receiverIdentityPublicKey: undefined,
+    }),
+  });
+  return res.paymentRequest;
+}
+
+/**
+ * Provider side of the escrow: pay the recipient's hold invoice, after
+ * checking it is for exactly this amount and our payment hash. The payment
+ * stays pending until the recipient claims it with our preimage.
+ */
+export async function payHoldInvoice(params: {
+  bolt11: string;
   amountSats: bigint;
   paymentHash: string;
-  expirySecs: number;
   idempotencySeed: string;
 }): Promise<WalletTx> {
   const s = await connect();
   const prepared = await s.prepareSendPayment({
-    paymentRequest: new PaymentRequest.Input({ input: params.sparkAddress }),
-    amount: params.amountSats,
+    paymentRequest: new PaymentRequest.Input({ input: params.bolt11 }),
+    amount: undefined,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
     feePolicy: undefined,
   });
-  const res = await s.sendPayment({
-    prepareResponse: prepared,
-    options: new SendPaymentOptions.SparkAddress({
-      htlcOptions: { paymentHash: params.paymentHash, expiryDurationSecs: BigInt(Math.max(60, Math.floor(params.expirySecs))) },
-    }),
-    idempotencyKey: idempotencyUuid(params.idempotencySeed),
-  });
-  return toTx(res.payment);
+  const method = prepared.paymentMethod;
+  if (!SendPaymentMethod.Bolt11Invoice.instanceOf(method)) throw new Error("The lock invoice isn't a Lightning invoice");
+  const invoice = method.inner.invoiceDetails;
+  if (invoice.paymentHash !== params.paymentHash) throw new Error("The lock invoice is for a different payment hash");
+  if (BigInt(invoice.amountMsat ?? 0n) !== params.amountSats * 1000n) throw new Error("The lock invoice is for the wrong amount");
+  const res = await s.sendPayment({ prepareResponse: prepared, options: undefined, idempotencyKey: idempotencyUuid(params.idempotencySeed) });
+  return withHtlc(res.payment);
 }
 
 export async function claimHtlc(preimage: string): Promise<WalletTx> {
@@ -472,13 +490,20 @@ export async function findHtlc(paymentHash: string, direction: "in" | "out"): Pr
     typeFilter: [direction === "in" ? PaymentType.Receive : PaymentType.Send],
     statusFilter: undefined,
     assetFilter: undefined,
-    paymentDetailsFilter: [new PaymentDetailsFilter.Spark({ htlcStatus: undefined, conversionRefundNeeded: undefined })],
+    paymentDetailsFilter: undefined,
     fromTimestamp: undefined,
     toTimestamp: undefined,
     offset: undefined,
     limit: 200,
     sortAscending: false,
   });
-  const match = payments.map(toTx).find((t) => t.htlc?.paymentHash === paymentHash);
+  const match = payments.map(withHtlc).find((t) => t.htlc?.paymentHash === paymentHash);
   return match ?? null;
+}
+
+/** A payment with its HTLC view, including Lightning hold-invoice payments. */
+function withHtlc(p: Payment): WalletTx {
+  const htlc = htlcOf(p);
+  // A held Lightning payment that failed went back to its payer.
+  return { ...toTx(p), htlc: htlc && p.status === PaymentStatus.Failed ? { ...htlc, status: "returned" } : htlc };
 }

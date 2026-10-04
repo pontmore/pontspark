@@ -19,6 +19,7 @@ import type { Event } from "nostr-tools/pure";
 import { KIND, RESOLUTION_POLICY, SWAP_TIMING, type DisputeClass } from "../protocol/constants";
 import { actionTemplate, rootTemplate } from "../protocol/events";
 import { checkRootAgainstOffer, parseOffer, priceStillHonoured, termsFromOffer, type Offer } from "../protocol/offer";
+import { errorText } from "../lib/errors";
 import { priceWithSpread } from "../lib/money";
 import {
   openWrap,
@@ -281,8 +282,9 @@ export function schedule(id: string) {
   const prev = queues.get(id) ?? Promise.resolve();
   const next = prev
     .then(() => runDuties(id))
-    .catch((e: Error) => {
-      useSwaps.getState().patchLocal(id, { lastError: e.message });
+    .catch((e: unknown) => {
+      if (__DEV__) console.warn(`[swap ${id.slice(0, 8)}] duty failed:`, errorText(e));
+      useSwaps.getState().patchLocal(id, { lastError: errorText(e) });
     })
     .finally(() => {
       if (queues.get(id) === next) queues.delete(id);
@@ -321,6 +323,7 @@ async function duty(id: string): Promise<boolean> {
         const request = payloadFrom(rec, root.customer, "request");
         if (!request) return false;
         const check = await validateRequest(rec, request.quote, request.private_terms);
+        if (direction === "btc_to_fiat" && !request.payment_hash) check.problems.push("The customer's app is too old for this agent");
         // A wallet or price feed that isn't up yet (e.g. right after launch)
         // says nothing about the request; check again on the next tick.
         if (check.unsure) throw new Error(check.unsure);
@@ -352,7 +355,8 @@ async function duty(id: string): Promise<boolean> {
         return true;
       }
       if (direction === "fiat_to_btc") return lockAndSecure(id);
-      // btc_to_fiat: the customer locks; our escrow key attests once verified.
+      // btc_to_fiat: the customer locks into our hold invoice; our escrow key attests once verified.
+      if (await sendInvoice(id)) return true;
       const check = await verifyIncomingLock(id);
       if (check.ok) {
         await act(id, ring.escrow.sk, "core/secure");
@@ -397,10 +401,11 @@ async function duty(id: string): Promise<boolean> {
 
   if (rec.role === "customer") {
     if (st.status === "proposed" && t < root.expiresAt && !sentByMe(rec, "request") && rec.local.quoteBytes) {
-      await send(id, { type: "request", quote: rec.local.quoteBytes, private_terms: rec.local.privateTermsBytes ?? "{}" });
+      await send(id, requestBody(rec, rec.local.quoteBytes, rec.local.privateTermsBytes ?? "{}"));
       return true;
     }
     if (st.status === "accepted" && direction === "btc_to_fiat") return lockAndSecure(id);
+    if (st.status === "accepted" && direction === "fiat_to_btc") return sendInvoice(id);
 
     if ((st.status === "settlement_authorized" || st.status === "settled") && direction === "fiat_to_btc" && !rec.local.claimedAt) {
       const release = payloadFrom(rec, root.agent, "release");
@@ -430,7 +435,38 @@ async function claim(id: string, preimage: string, hash: string) {
   if (!sentByMe(record(id), "claimed")) await send(id, { type: "claimed" });
 }
 
-/** Bitcoin provider: lock the HTLC (idempotently), announce it, and — for the agent — secure. */
+/** The payment hash the bitcoin provider announced (accept or request payload). */
+function announcedHash(rec: SwapRecord, st: SwapState): string | undefined {
+  const provider = bitcoinProvider(st.root);
+  return provider === st.root.agent
+    ? payloadFrom(rec, provider, "accept")?.payment_hash
+    : payloadFrom(rec, provider, "request")?.payment_hash;
+}
+
+function requestBody(rec: SwapRecord, quote: string, privateTerms: string): PayloadBody {
+  const st = swapState(rec);
+  const iProvide = bitcoinProvider(st.root) === k().identity.pk;
+  return { type: "request", quote, private_terms: privateTerms, ...(iProvide ? { payment_hash: paymentHashOf(htlcPreimage(k().identity.sk, rec.id)) } : {}) };
+}
+
+/** Bitcoin recipient: hand the provider a hold invoice for its payment hash (once). */
+async function sendInvoice(id: string): Promise<boolean> {
+  const rec = record(id);
+  const st = swapState(rec);
+  if (bitcoinProvider(st.root) === k().identity.pk || sentByMe(rec, "invoice")) return false;
+  const hash = announcedHash(rec, st);
+  if (!hash) return false;
+  const bolt11 = await wallet.holdInvoice({
+    amountSats: BigInt(st.root.terms.bitcoin.amount),
+    paymentHash: hash,
+    expirySecs: st.root.terms.deadlines.fiat_pay_by - now(),
+    description: `Pontmore swap ${id.slice(0, 8)}`,
+  });
+  await send(id, { type: "invoice", bolt11 });
+  return true;
+}
+
+/** Bitcoin provider: pay the recipient's hold invoice (idempotently), announce it, and — for the agent — secure. */
 async function lockAndSecure(id: string): Promise<boolean> {
   const ring = k();
   const rec = record(id);
@@ -442,23 +478,15 @@ async function lockAndSecure(id: string): Promise<boolean> {
 
   if (!sentByMe(rec, "locked")) {
     let tx = await wallet.findHtlc(hash, "out");
-    if (!tx) {
+    if (!tx || tx.htlc?.status === "returned") {
       if (now() > root.terms.deadlines.fiat_pay_by - MIN_PAY_TIME) {
         throw new Error("Too close to the payment deadline to lock bitcoin safely");
       }
-      const recipient =
-        rec.role === "agent"
-          ? privateTermsOf(rec)?.spark_address
-          : payloadFrom(rec, root.agent, "accept")?.spark_address;
-      if (!recipient) return false;
+      const recipient = rec.role === "agent" ? root.customer : root.agent;
+      const invoice = payloadFrom(rec, recipient, "invoice");
+      if (!invoice) return false;
       useSwaps.getState().patchLocal(id, { lockStartedAt: now() });
-      tx = await wallet.lockHtlc({
-        sparkAddress: recipient,
-        amountSats: amount,
-        paymentHash: hash,
-        expirySecs: htlcExpiry(st) - now(),
-        idempotencySeed: `pontmore/lock/${id}`,
-      });
+      tx = await wallet.payHoldInvoice({ bolt11: invoice.bolt11, amountSats: amount, paymentHash: hash, idempotencySeed: `pontmore/lock/${id}` });
       void useWallet.getState().refresh();
     }
     useSwaps.getState().patchLocal(id, { lockTxId: tx.id });
@@ -504,7 +532,6 @@ async function validateRequest(rec: SwapRecord, quoteBytes: string, privateTerms
     else if (!priceStillHonoured(offer, current, SWAP_TIMING.quoteTolerancePct)) problems.push("Price has moved since this offer");
   }
   if (root.terms.direction === "fiat_to_btc") {
-    if (!terms?.spark_address) problems.push("No Spark address to send bitcoin to");
     if (!market || !detailsComplete(root.terms.payment_channel, market.channels[root.terms.payment_channel]))
       problems.push("No payment details for this channel");
     let balance: bigint;
@@ -528,9 +555,9 @@ async function sendAcceptDetails(id: string) {
     const market = useAgent.getState().markets.find((m) => m.currency === root.terms.fiat.currency);
     const details = market?.channels[root.terms.payment_channel];
     if (!details) throw new Error("Add your payment details for this channel first");
-    await send(id, { type: "accept", payment: { channel: root.terms.payment_channel, details } });
+    await send(id, { type: "accept", payment: { channel: root.terms.payment_channel, details }, payment_hash: paymentHashOf(htlcPreimage(k().identity.sk, id)) });
   } else {
-    await send(id, { type: "accept", spark_address: await wallet.sparkAddress() });
+    await send(id, { type: "accept" });
   }
 }
 
@@ -561,9 +588,7 @@ export async function createSwap(input: NewSwap): Promise<string> {
       throw new Error(`Add your ${channelInfo(input.channel).short} details so the agent can pay you`);
   }
   const privateTerms: PrivateTerms =
-    input.direction === "fiat_to_btc"
-      ? { spark_address: await wallet.sparkAddress() }
-      : { payout: { channel: input.channel, details: input.payout! } };
+    input.direction === "fiat_to_btc" ? {} : { payout: { channel: input.channel, details: input.payout! } };
   const privateTermsBytes = JSON.stringify(privateTerms);
   const escrowPk = input.offer.escrow.split(":")[1];
   const root = sign(
@@ -592,7 +617,7 @@ export async function createSwap(input: NewSwap): Promise<string> {
     counterpartyName: input.listing.profile.name,
   });
   try {
-    await send(root.id, { type: "request", quote: input.offer.raw, private_terms: privateTermsBytes });
+    await send(root.id, requestBody(record(root.id), input.offer.raw, privateTermsBytes));
   } catch {
     // The root is public; the engine retries the private request.
     schedule(root.id);

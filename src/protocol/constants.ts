@@ -33,14 +33,17 @@ export const SWAP_CAPABILITY = "pontmore/swap@1";
 export const PIP02_VERSION = 2;
 
 /**
- * Implementation assumption: a non-custodial escrow made of a Breez Spark HTLC.
- * The Bitcoin provider locks sats to the recipient's Spark address under a
- * payment hash and releases the preimage only after fiat is confirmed; the
- * lock returns to the provider on expiry. The descriptor publisher is the
- * bound `core/escrow` authority.
+ * Implementation assumption: a non-custodial escrow made of a Lightning hold
+ * invoice between two Breez Spark wallets. The Bitcoin provider picks the
+ * payment hash; the recipient creates a hold invoice for it and the provider
+ * pays it. The payment stays held until the provider releases the preimage
+ * after fiat is confirmed, and fails back to the provider if it never is.
+ * (Direct Spark-to-Spark HTLCs, the earlier `spark_htlc` escrow, are refused
+ * by Spark operators.) The descriptor publisher is the bound `core/escrow`
+ * authority.
  */
-export const ESCROW_TYPE = "spark_htlc";
-export const ESCROW_D_TAG = "spark-htlc";
+export const ESCROW_TYPE = "spark_hold_invoice";
+export const ESCROW_D_TAG = "spark-hold-invoice";
 export const ESCROW_NETWORK = "spark";
 
 export const AGENT_D_TAG = "agent";
@@ -68,10 +71,14 @@ export const SWAP_TIMING = {
   acceptWindow: 15 * 60,
   /** Fiat must be sent within this window after the request. */
   payWindow: 75 * 60,
-  /** Fiat receipt must be confirmed within this window after the request. */
-  confirmWindow: 4 * 60 * 60,
-  /** HTLC stays locked this long beyond `fiat_confirm_by` so release can land. */
-  htlcGrace: 2 * 60 * 60,
+  /**
+   * Fiat receipt must be confirmed within this window after the request.
+   * Spark holds an incoming hold-invoice payment for about 4 hours, so this
+   * leaves room to release after the last possible confirmation.
+   */
+  confirmWindow: 3 * 60 * 60,
+  /** The lock is expected to outlive `fiat_confirm_by` by this much. */
+  htlcGrace: 60 * 60,
   /** Offers are republished while online and expire on their own when not. */
   offerLifetime: 30 * 60,
   /** How far a quoted price may be from the agent's current price and still be honoured. */

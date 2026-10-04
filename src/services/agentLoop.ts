@@ -44,7 +44,7 @@ function startLoop() {
 function stopLoop() {
   if (timer) clearInterval(timer);
   timer = null;
-  deactivateKeepAwake(KEEP_AWAKE_TAG);
+  void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => undefined);
 }
 
 export async function setAgentOnline(online: boolean): Promise<void> {

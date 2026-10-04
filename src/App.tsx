@@ -7,6 +7,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { RootNavigator } from "./navigation";
 import { resumeAgent, suspendAgent } from "./services/agentLoop";
+import { installDevProbe } from "./services/devProbe";
 import { resumeEngine, startEngine, stopEngine } from "./services/swapEngine";
 import { useSession } from "./store/session";
 import { useWallet } from "./store/wallet";
@@ -47,6 +48,8 @@ function useBoot() {
     return () => sub.remove();
   }, []);
 }
+
+installDevProbe();
 
 export default function App() {
   const c = useColors();
