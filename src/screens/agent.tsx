@@ -156,11 +156,11 @@ function OfferPreview({ market }: { market: Market }) {
         {!ready.length ? <Badge label="Needs payment details" tone="warning" /> : !offer ? <Badge label="Not offered" tone="warning" /> : null}
       </View>
       {offer?.buy && (
-        <Row icon="arrow-up-right" title={`You sell at ${market.currency} ${formatDecimal(offer.buy.price, 0)}`} subtitle={`+${market.buy.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.buy.max)}`} />
+        <Row icon="arrow-up-right" title={`You sell at ${market.currency} ${formatDecimal(offer.buy.price, 0)} per BTC`} subtitle={`+${market.buy.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.buy.max)}`} />
       )}
       {market.buy.enabled && rate && !built.buy && ready.length > 0 && <Notice tone="warning">Not enough bitcoin to sell. Top up your wallet.</Notice>}
       {offer?.sell && (
-        <Row icon="arrow-down-left" title={`You buy at ${market.currency} ${formatDecimal(offer.sell.price, 0)}`} subtitle={`−${market.sell.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.sell.max)}`} />
+        <Row icon="arrow-down-left" title={`You buy at ${market.currency} ${formatDecimal(offer.sell.price, 0)} per BTC`} subtitle={`−${market.sell.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.sell.max)}`} />
       )}
       <Text variant="caption" muted>
         {ready.map((c) => channelInfo(c).short).join(" · ") || "No channels ready"}

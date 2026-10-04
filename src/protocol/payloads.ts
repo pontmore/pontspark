@@ -28,7 +28,7 @@ export interface PrivateTerms {
 
 export type PayloadBody =
   /** `payment_hash`: set when the customer provides the bitcoin (btc_to_fiat). */
-  | { type: "request"; quote: string; private_terms: string; payment_hash?: string }
+  | { type: "request"; quote: string; private_terms: string; payment_hash?: string; name?: string }
   /** `payment_hash`: set when the agent provides the bitcoin (fiat_to_btc). */
   | { type: "accept"; payment?: PaymentDetails; spark_address?: string; payment_hash?: string }
   /** From the bitcoin recipient: a hold invoice for the provider's payment hash. */

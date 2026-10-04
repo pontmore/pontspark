@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import React, { useEffect, useRef } from "react";
 import {
   ActivityIndicator,
+  AccessibilityInfo,
   Animated,
   Pressable,
   RefreshControl,
@@ -547,9 +548,18 @@ export function Spinner({ label }: { label?: string }) {
 export function Pulse({ color, size = 10 }: { color: string; size?: number }) {
   const v = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    const loop = Animated.loop(Animated.timing(v, { toValue: 1, duration: 1400, useNativeDriver: true }));
-    loop.start();
-    return () => loop.stop();
+    // An endless loop is noise for people who turned animations off.
+    let loop: Animated.CompositeAnimation | null = null;
+    let alive = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
+      if (!alive || reduce) return;
+      loop = Animated.loop(Animated.timing(v, { toValue: 1, duration: 1400, useNativeDriver: true }));
+      loop.start();
+    });
+    return () => {
+      alive = false;
+      loop?.stop();
+    };
   }, [v]);
   return (
     <View style={{ width: size * 2.4, height: size * 2.4, alignItems: "center", justifyContent: "center" }}>

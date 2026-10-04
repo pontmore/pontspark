@@ -43,6 +43,7 @@ import {
 import { channelInfo, detailsComplete, type ChannelDetails } from "../lib/channels";
 import { commit, htlcPreimage, paymentHashOf, verifyCommitment, type KeyRing } from "../lib/keys";
 import { useAgent } from "../store/agent";
+import { useSession } from "../store/session";
 import { payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
 import { useWallet } from "../store/wallet";
 import type { AgentListing } from "./discovery";
@@ -331,6 +332,7 @@ async function duty(id: string): Promise<boolean> {
           problems: check.problems,
           quoteBytes: request.quote,
           privateTermsBytes: request.private_terms,
+          ...(request.name && !rec.local.counterpartyName ? { counterpartyName: String(request.name).slice(0, 40) } : {}),
         });
         return true;
       }
@@ -446,7 +448,15 @@ function announcedHash(rec: SwapRecord, st: SwapState): string | undefined {
 function requestBody(rec: SwapRecord, quote: string, privateTerms: string): PayloadBody {
   const st = swapState(rec);
   const iProvide = bitcoinProvider(st.root) === k().identity.pk;
-  return { type: "request", quote, private_terms: privateTerms, ...(iProvide ? { payment_hash: paymentHashOf(htlcPreimage(k().identity.sk, rec.id)) } : {}) };
+  // Customers don't publish a profile; tell the agent who they're swapping with.
+  const name = useSession.getState().profile.name.trim();
+  return {
+    type: "request",
+    quote,
+    private_terms: privateTerms,
+    ...(iProvide ? { payment_hash: paymentHashOf(htlcPreimage(k().identity.sk, rec.id)) } : {}),
+    ...(name ? { name: name.slice(0, 40) } : {}),
+  };
 }
 
 /** Bitcoin recipient: hand the provider a hold invoice for its payment hash (once). */

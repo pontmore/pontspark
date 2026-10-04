@@ -6,6 +6,7 @@ import { View } from "react-native";
 import { useMe } from "../hooks";
 import type { SwapItem } from "../hooks";
 import { describeSwap, STEPS, timeAgo } from "../lib/swapView";
+import { channelInfo } from "../lib/channels";
 import { formatSatsShort } from "../lib/money";
 import { unreadCount, useSwaps } from "../store/swaps";
 import type { WalletTx } from "../services/wallet";
@@ -25,7 +26,7 @@ export function SwapRow({ item }: { item: SwapItem }) {
       onPress={() => nav.navigate("SwapDetail", { id: item.rec.id })}
       left={
         <View>
-          <Avatar pk={counterparty} name={item.rec.role === "customer" ? item.rec.local.counterpartyName : undefined} size={42} />
+          <Avatar pk={counterparty} name={item.rec.local.counterpartyName} size={42} />
           {view.myTurn && (
             <View style={{ position: "absolute", right: -6, top: -6 }}>
               <Pulse color={c.accent} size={8} />
@@ -38,7 +39,7 @@ export function SwapRow({ item }: { item: SwapItem }) {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: t.fg }} />
           <Text variant="caption" muted numberOfLines={1} style={{ flexShrink: 1 }}>
-            {view.headline} · {timeAgo(item.rec.updatedAt)}
+            {[view.headline, item.rec.local.counterpartyName, channelInfo(item.st.root.terms.payment_channel).short, timeAgo(item.rec.updatedAt)].filter(Boolean).join(" · ")}
           </Text>
         </View>
       }
