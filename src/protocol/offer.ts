@@ -18,7 +18,7 @@ import { verifyEvent, type Event } from "nostr-tools/pure";
 import { ESCROW_D_TAG, ESCROW_NETWORK, KIND, OFFER_PLATFORM, SWAP_PROFILE, escrowAddress } from "./constants";
 import { compareDecimal, isDecimalAmount, satsForFiat } from "../lib/money";
 import { verifyCommitment } from "../lib/keys";
-import type { Direction, SwapRoot } from "./swap";
+import type { Direction, SwapRoot, SwapTerms } from "./swap";
 
 export interface OfferSide {
   /** Exact fiat price per BTC. */
@@ -149,6 +149,29 @@ export function quote(offer: OfferContent, direction: Direction, fiatAmount: str
   const s = offerSide(offer, direction);
   if (!s) return null;
   return { direction, fiatAmount, sats: satsForFiat(fiatAmount, s.price), price: s.price };
+}
+
+/**
+ * The terms a customer commits to when requesting a swap from `offer`. The
+ * swap's `bitcoin.network` is the offer's settlement layer (spark), not its
+ * NIP-69 chain network; agents decline anything else.
+ */
+export function termsFromOffer(
+  offer: OfferContent,
+  direction: Direction,
+  fiatAmount: string,
+  channel: string,
+  deadlines: SwapTerms["deadlines"],
+): SwapTerms | null {
+  const q = quote(offer, direction, fiatAmount);
+  if (!q || q.sats <= 0n) return null;
+  return {
+    direction,
+    fiat: { currency: offer.currency, amount: fiatAmount },
+    bitcoin: { amount: q.sats.toString(), unit: "sat", network: offer.layer },
+    payment_channel: channel,
+    deadlines,
+  };
 }
 
 export type LimitCheck = "ok" | "below_min" | "above_max" | "unsupported";

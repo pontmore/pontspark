@@ -154,9 +154,10 @@ export function onWalletEvent(listener: (e: WalletEvent) => void): () => void {
 
 // -- balance, rates, history -------------------------------------------------
 
-export async function balanceSats(): Promise<bigint> {
+/** `synced` waits for the wallet to catch up first, e.g. before committing funds. */
+export async function balanceSats(synced = false): Promise<bigint> {
   const s = await connect();
-  const info = await s.getInfo({ ensureSynced: false });
+  const info = await s.getInfo({ ensureSynced: synced });
   return BigInt(info.balanceSats);
 }
 

@@ -32,7 +32,9 @@ export type PayloadBody =
   | { type: "locked"; payment_hash: string; expires_at: number; amount: string }
   | { type: "fiat_sent"; reference: string }
   | { type: "release"; preimage: string }
-  | { type: "claimed" };
+  | { type: "claimed" }
+  /** Why the agent declined; private so the reasons never appear in public events. */
+  | { type: "declined"; reasons: string[] };
 
 export type SwapPayload = PayloadBody & {
   v: 1;
@@ -96,7 +98,7 @@ export function wrapChat(senderSk: Uint8Array, senderPk: string, recipientPk: st
   return [wrapEvent(rumor, senderSk, recipientPk), wrapEvent(rumor, senderSk, senderPk)];
 }
 
-const PAYLOAD_TYPES = new Set(["request", "accept", "locked", "fiat_sent", "release", "claimed"]);
+const PAYLOAD_TYPES = new Set(["request", "accept", "locked", "fiat_sent", "release", "claimed", "declined"]);
 
 /** Unwrap a gift wrap addressed to `sk`, or null if it is not ours or not a swap message. */
 export function openWrap(wrap: Event, sk: Uint8Array): InboxItem | null {

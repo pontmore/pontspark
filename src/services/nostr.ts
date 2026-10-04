@@ -61,15 +61,66 @@ export function latestByAddress(events: Event[]): Event[] {
   return [...best.values()];
 }
 
+/**
+ * Live subscription that survives dropped connections. nostr-tools reconnects
+ * a relay whose socket closes, but when an open socket *errors* (common on
+ * Android after a network change or with the screen off) it drops the relay
+ * and closes its subscriptions for good. Without this, an agent stays
+ * "online" while no request ever reaches it.
+ */
+/**
+ * Live subscription that survives dropped connections. nostr-tools reconnects
+ * a relay whose socket closes, but when an open socket *errors* (common on
+ * Android after a network change or with the screen off) it drops the relay
+ * and closes its subscriptions for good. Without this, an agent stays
+ * "online" while no request ever reaches it. Each relay is subscribed on its
+ * own so one dead relay recovers even while the others are fine.
+ */
 export function subscribe(filters: Filter[], onEvent: (e: Event) => void, onEose?: () => void): () => void {
   if (!relays.length) return () => undefined;
-  const subs = filters.map((f, i) =>
-    p().subscribeMany(relays, f, {
-      onevent: onEvent,
-      oneose: i === 0 ? onEose : undefined,
-    }),
-  );
-  return () => subs.forEach((s) => s.close());
+  let stopped = false;
+  let eosePending = relays.length;
+  const seen = new Set<string>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const closers = new Map<string, () => void>();
+
+  const deliver = (e: Event) => {
+    if (seen.has(e.id)) return;
+    seen.add(e.id);
+    onEvent(e);
+  };
+
+  const open = (url: string, f: Filter, key: string, attempt: number) => {
+    let eosed = false;
+    const sub = p().subscribeMany([url], f, {
+      onevent: deliver,
+      oneose: () => {
+        if (!eosed && attempt === 0 && key.endsWith("#0") && --eosePending === 0) onEose?.();
+        eosed = true;
+      },
+      onclose: (reasons) => {
+        if (stopped) return;
+        // e.g. relay.damus.io serves gift wraps only after NIP-42 AUTH, which it
+        // doesn't support; asking again won't change that.
+        if (reasons.some((r) => r.reason.includes("auth-required:"))) return;
+        if (__DEV__) console.warn("[nostr] subscription dropped, reopening", url, JSON.stringify(f), JSON.stringify(reasons));
+        const next = eosed ? 1 : attempt + 1;
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          if (!stopped) closers.set(key, open(url, f, key, next));
+        }, Math.min(60_000, 1_000 * 2 ** next));
+        timers.add(timer);
+      },
+    });
+    return () => sub.close();
+  };
+
+  for (const url of relays) filters.forEach((f, i) => closers.set(`${url}#${i}`, open(url, f, `${url}#${i}`, 0)));
+  return () => {
+    stopped = true;
+    timers.forEach(clearTimeout);
+    closers.forEach((close) => close());
+  };
 }
 
 export function relayStatus(): Map<string, boolean> {

@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from "react-native";
+import type { Event } from "nostr-tools/pure";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useMe, useNow, useSwap } from "../hooks";
@@ -10,6 +11,7 @@ import { formatDecimal, formatSats } from "../lib/money";
 import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
 import { npub } from "../lib/links";
 import { DISPUTE_CLASSES, type DisputeClass } from "../protocol/constants";
+import { parseOffer } from "../protocol/offer";
 import { parsePrivateTerms } from "../protocol/payloads";
 import { bitcoinProvider, fiatReceiver, fiatSender } from "../protocol/swap";
 import { fetchProfile } from "../services/discovery";
@@ -106,6 +108,15 @@ export function SwapDetailScreen() {
   const tone = toneColors(c, view.tone);
   const ch = channelInfo(root.terms.payment_channel);
   const isAgent = rec.role === "agent";
+  const declineReasons = payloadFrom(rec, root.agent, "declined")?.reasons;
+  // The agreed price, not one derived back from the rounded sats.
+  const quotedPrice = (() => {
+    try {
+      return rec.local.quoteBytes ? parseOffer(JSON.parse(rec.local.quoteBytes) as Event, { verify: false }).price : null;
+    } catch {
+      return null;
+    }
+  })();
   const them = rec.local.counterpartyName || (isAgent ? "Customer" : "Agent");
   const unread = unreadCount(rec, me);
   const iPayFiat = fiatSender(root) === me;
@@ -229,9 +240,15 @@ export function SwapDetailScreen() {
         </Notice>
       )}
 
-      {isAgent && rec.local.problems && rec.local.problems.length > 0 && st.status === "proposed" && (
-        <Notice tone="danger" title="This request doesn't match your offer">
+      {isAgent && rec.local.problems && rec.local.problems.length > 0 && (st.status === "proposed" || st.status === "declined") && (
+        <Notice tone="danger" title={st.status === "declined" ? "Declined automatically" : "This request doesn't match your offer"}>
           {rec.local.problems.join(" · ")}
+        </Notice>
+      )}
+
+      {!isAgent && st.status === "declined" && declineReasons && declineReasons.length > 0 && (
+        <Notice tone="warning" title="Why it was declined">
+          {declineReasons.join(" · ")}
         </Notice>
       )}
 
@@ -289,7 +306,8 @@ export function SwapDetailScreen() {
           <KeyValue
             label="Rate"
             value={`1 BTC = ${root.terms.fiat.currency} ${formatDecimal(
-              ((Number(root.terms.fiat.amount) * 1e8) / Number(root.terms.bitcoin.amount)).toFixed(0),
+              quotedPrice ?? ((Number(root.terms.fiat.amount) * 1e8) / Number(root.terms.bitcoin.amount)).toFixed(0),
+              0,
             )}`}
           />
           <KeyValue label="Channel" value={ch.label} />

@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, View } from "react-native";
+import { Animated, KeyboardAvoidingView, Modal, Pressable, StyleSheet, View } from "react-native";
 import QRCode from "react-qr-code";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { create } from "zustand";
@@ -62,7 +62,8 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
   }, [visible, y]);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+      {/* A modal is its own window, so Android's adjustResize never reaches it: pad on both platforms. */}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: c.overlay }]} onPress={onClose} />
         <View style={{ flex: 1 }} pointerEvents="box-none" />
         <Animated.View

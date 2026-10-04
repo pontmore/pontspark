@@ -280,9 +280,17 @@ function MarketSheet({ market, onClose, onSave, onRemove }: { market: Market; on
   const rate = useWallet((s) => s.rates[market.currency]);
   const options = channelsForCurrency(m.currency);
   const valid = (s: MarketSide) => !s.enabled || (isDecimalAmount(s.min) && isDecimalAmount(s.max) && Number(s.min) <= Number(s.max) && s.spreadPct >= -5 && s.spreadPct <= 30);
+  // Back and tap-outside close the sheet; don't let them silently drop edits.
+  const close = () => {
+    if (!channelEdit && JSON.stringify(m) === JSON.stringify(market)) return onClose();
+    Alert.alert("Discard changes?", `Your changes to ${m.currency} haven't been saved.`, [
+      { text: "Keep editing", style: "cancel" },
+      { text: "Discard", style: "destructive", onPress: onClose },
+    ]);
+  };
 
   return (
-    <Sheet visible onClose={onClose} title={`${currencyInfo(m.currency).flag} ${m.currency}`}>
+    <Sheet visible onClose={close} title={`${currencyInfo(m.currency).flag} ${m.currency}`}>
       <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: space.lg }} keyboardShouldPersistTaps="handled">
         <Section title="Payment channels">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>

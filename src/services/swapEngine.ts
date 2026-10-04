@@ -18,7 +18,7 @@ import type { Event } from "nostr-tools/pure";
 
 import { KIND, RESOLUTION_POLICY, SWAP_TIMING, type DisputeClass } from "../protocol/constants";
 import { actionTemplate, rootTemplate } from "../protocol/events";
-import { checkRootAgainstOffer, parseOffer, priceStillHonoured, type Offer, quote as quoteFor } from "../protocol/offer";
+import { checkRootAgainstOffer, parseOffer, priceStillHonoured, termsFromOffer, type Offer } from "../protocol/offer";
 import { priceWithSpread } from "../lib/money";
 import {
   openWrap,
@@ -45,7 +45,7 @@ import { useAgent } from "../store/agent";
 import { payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
 import { useWallet } from "../store/wallet";
 import type { AgentListing } from "./discovery";
-import { publish, publishAll, query, sign, subscribe } from "./nostr";
+import { publish, publishAll, query, resetPool, sign, subscribe } from "./nostr";
 import * as wallet from "./wallet";
 
 const now = () => Math.floor(Date.now() / 1000);
@@ -84,6 +84,18 @@ export function startEngine(ring: KeyRing) {
   tick = setInterval(() => {
     for (const id of activeIds()) schedule(id);
   }, 30_000);
+}
+
+/**
+ * Back in the foreground: sockets may have died silently while the app was
+ * in the background, so reconnect from scratch and catch up on missed events.
+ */
+export function resumeEngine() {
+  const ring = keys;
+  if (!ring) return;
+  stopEngine();
+  resetPool();
+  startEngine(ring);
 }
 
 export function stopEngine() {
@@ -308,14 +320,21 @@ async function duty(id: string): Promise<boolean> {
       if (!rec.local.problems) {
         const request = payloadFrom(rec, root.customer, "request");
         if (!request) return false;
+        const check = await validateRequest(rec, request.quote, request.private_terms);
+        // A wallet or price feed that isn't up yet (e.g. right after launch)
+        // says nothing about the request; check again on the next tick.
+        if (check.unsure) throw new Error(check.unsure);
         useSwaps.getState().patchLocal(id, {
-          problems: await validateRequest(rec, request.quote, request.private_terms),
+          problems: check.problems,
           quoteBytes: request.quote,
           privateTermsBytes: request.private_terms,
         });
         return true;
       }
       if (rec.local.problems.length) {
+        if (__DEV__) console.warn(`[swap ${id.slice(0, 8)}] declining:`, rec.local.problems);
+        // Tell the customer why, privately; the decline itself must not wait on it.
+        if (!sentByMe(rec, "declined")) await send(id, { type: "declined", reasons: rec.local.problems }).catch(() => undefined);
         await act(id, ring.identity.sk, "core/decline");
         return true;
       }
@@ -453,7 +472,13 @@ async function lockAndSecure(id: string): Promise<boolean> {
   return false;
 }
 
-async function validateRequest(rec: SwapRecord, quoteBytes: string, privateTermsBytes: string): Promise<string[]> {
+interface RequestCheck {
+  problems: string[];
+  /** Set when the agent couldn't check the request yet; never decline on it. */
+  unsure?: string;
+}
+
+async function validateRequest(rec: SwapRecord, quoteBytes: string, privateTermsBytes: string): Promise<RequestCheck> {
   const ring = k();
   const st = swapState(rec);
   const { root } = st;
@@ -475,20 +500,25 @@ async function validateRequest(rec: SwapRecord, quoteBytes: string, privateTerms
     const current = rate ? priceWithSpread(rate, (root.terms.direction === "fiat_to_btc" ? 1 : -1) * side.spreadPct) : null;
     const offer = parseOffer(JSON.parse(quoteBytes) as Event, { verify: false });
     if (!side.enabled) problems.push("I no longer offer this direction");
-    else if (!current) problems.push("Market price is unavailable");
+    else if (!current) return { problems, unsure: "Market price is unavailable" };
     else if (!priceStillHonoured(offer, current, SWAP_TIMING.quoteTolerancePct)) problems.push("Price has moved since this offer");
   }
   if (root.terms.direction === "fiat_to_btc") {
     if (!terms?.spark_address) problems.push("No Spark address to send bitcoin to");
     if (!market || !detailsComplete(root.terms.payment_channel, market.channels[root.terms.payment_channel]))
       problems.push("No payment details for this channel");
-    const balance = await wallet.balanceSats().catch(() => 0n);
+    let balance: bigint;
+    try {
+      balance = await wallet.balanceSats(true);
+    } catch (e) {
+      return { problems, unsure: `Couldn't read the wallet balance: ${(e as Error).message}` };
+    }
     if (balance < BigInt(root.terms.bitcoin.amount)) problems.push("Not enough bitcoin to cover this swap");
   } else if (!terms?.payout || terms.payout.channel !== root.terms.payment_channel || !detailsComplete(terms.payout.channel, terms.payout.details)) {
     problems.push("Customer payout details are missing");
   }
   if (now() > root.terms.deadlines.fiat_pay_by - MIN_PAY_TIME * 2) problems.push("Request is too old to complete safely");
-  return problems;
+  return { problems };
 }
 
 async function sendAcceptDetails(id: string) {
@@ -518,11 +548,15 @@ export interface NewSwap {
 
 export async function createSwap(input: NewSwap): Promise<string> {
   const ring = k();
-  const q = quoteFor(input.offer, input.direction, input.fiatAmount);
-  if (!q || q.sats <= 0n) throw new Error("This agent can't quote that amount");
+  const t = now();
+  const terms = termsFromOffer(input.offer, input.direction, input.fiatAmount, input.channel, {
+    fiat_pay_by: t + SWAP_TIMING.payWindow,
+    fiat_confirm_by: t + SWAP_TIMING.confirmWindow,
+  });
+  if (!terms) throw new Error("This agent can't quote that amount");
   if (input.direction === "btc_to_fiat") {
     const balance = await wallet.balanceSats();
-    if (balance < q.sats) throw new Error("Not enough bitcoin in your wallet for this swap");
+    if (balance < BigInt(terms.bitcoin.amount)) throw new Error("Not enough bitcoin in your wallet for this swap");
     if (!input.payout || !detailsComplete(input.channel, input.payout))
       throw new Error(`Add your ${channelInfo(input.channel).short} details so the agent can pay you`);
   }
@@ -531,28 +565,24 @@ export async function createSwap(input: NewSwap): Promise<string> {
       ? { spark_address: await wallet.sparkAddress() }
       : { payout: { channel: input.channel, details: input.payout! } };
   const privateTermsBytes = JSON.stringify(privateTerms);
-  const t = now();
+  const escrowPk = input.offer.escrow.split(":")[1];
   const root = sign(
     rootTemplate({
       agent: input.listing.pk,
       customer: ring.identity.pk,
-      escrow: input.offer.escrow.split(":")[1],
+      escrow: escrowPk,
       resolver: input.offer.resolver,
       descriptorId: input.listing.descriptor.id,
-      terms: {
-        direction: input.direction,
-        fiat: { currency: input.offer.currency, amount: input.fiatAmount },
-        bitcoin: { amount: q.sats.toString(), unit: "sat", network: input.offer.network },
-        payment_channel: input.channel,
-        deadlines: { fiat_pay_by: t + SWAP_TIMING.payWindow, fiat_confirm_by: t + SWAP_TIMING.confirmWindow },
-      },
+      terms,
       expiresAt: t + SWAP_TIMING.acceptWindow,
       commitments: { quote: commit(input.offer.raw), private_terms: commit(privateTermsBytes) },
       createdAt: t,
     }),
     ring.identity.sk,
   );
-  parseRoot(root); // never publish a root we would reject
+  // Never publish a root we would reject, or one the agent's own checks would decline.
+  const problems = checkRootAgainstOffer(parseRoot(root), input.offer.raw, input.listing.pk, escrowPk);
+  if (problems.length) throw new Error(`This request wouldn't match the agent's offer: ${problems.join("; ")}`);
   await publish(root);
   const rec = useSwaps.getState().upsertRoot(root, ring.identity.pk);
   if (!rec) throw new Error("Could not create the swap");

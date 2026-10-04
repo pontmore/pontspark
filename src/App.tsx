@@ -7,9 +7,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { RootNavigator } from "./navigation";
 import { resumeAgent, suspendAgent } from "./services/agentLoop";
-import { schedule, startEngine, stopEngine } from "./services/swapEngine";
+import { resumeEngine, startEngine, stopEngine } from "./services/swapEngine";
 import { useSession } from "./store/session";
-import { useSwaps } from "./store/swaps";
 import { useWallet } from "./store/wallet";
 import { Logo } from "./ui/components";
 import { ToastHost } from "./ui/extras";
@@ -43,7 +42,7 @@ function useBoot() {
     const sub = AppState.addEventListener("change", (s) => {
       if (s !== "active" || useSession.getState().phase !== "ready") return;
       void useWallet.getState().refresh();
-      Object.keys(useSwaps.getState().records).forEach(schedule);
+      resumeEngine();
     });
     return () => sub.remove();
   }, []);

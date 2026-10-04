@@ -1,7 +1,7 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from "nostr-tools/pure";
 
 import { actionTemplate, escrowDescriptorTemplate, offerTemplate, rootTemplate } from "./events";
-import { checkRootAgainstOffer, isOfferLive, parseOffer, priceStillHonoured, quote, serializeOffer } from "./offer";
+import { checkRootAgainstOffer, isOfferLive, parseOffer, priceStillHonoured, quote, serializeOffer, termsFromOffer } from "./offer";
 import { parseRoot, reconstruct, type Direction, type SwapRoot } from "./swap";
 import { escrowAddress } from "./constants";
 import { commit, deriveKeyRing, htlcPreimage, paymentHashOf } from "../lib/keys";
@@ -235,6 +235,28 @@ describe("offers and quotes", () => {
     expect(checkRootAgainstOffer(make("9000"), raw, ring.identity.pk, ring.escrow.pk)).toContain(
       "Bitcoin amount does not match the quoted price",
     );
+
+    // What a customer actually requests must pass the agent's checks.
+    const terms = termsFromOffer(offer, "fiat_to_btc", "1000", "mpesa_phone_ke_kes@2", { fiat_pay_by: T0 + 3600, fiat_confirm_by: T0 + 7200 })!;
+    expect(terms.bitcoin).toEqual({ amount: "7407", unit: "sat", network: "spark" });
+    const requested = parseRoot(
+      finalizeEvent(
+        rootTemplate({
+          agent: ring.identity.pk,
+          customer: customer.pk,
+          escrow: ring.escrow.pk,
+          resolver: ring.resolver.pk,
+          descriptorId: descriptor.id,
+          terms,
+          expiresAt: T0 + 600,
+          commitments: { quote: commit(raw) },
+          createdAt: T0,
+        }),
+        customer.sk,
+      ),
+    );
+    expect(checkRootAgainstOffer(requested, raw, ring.identity.pk, ring.escrow.pk)).toEqual([]);
+    expect(termsFromOffer(offer, "fiat_to_btc", "0", "mpesa_phone_ke_kes@2", terms.deadlines)).toBeNull();
   });
 
   it("publishes offers as NIP-69 orders", () => {
@@ -306,6 +328,8 @@ describe("keys and private payloads", () => {
     expect(got.from).toBe(a.pk);
     expect(openWrap(toSelf, a.sk)?.coordination).toBe(root);
     expect(openWrap(toB, a.sk)).toBeNull();
+    const [declined] = wrapPayload(a.sk, a.pk, b.pk, root, [a.pk, b.pk], { type: "declined", reasons: ["Price has moved since this offer"] });
+    expect(openWrap(declined, b.sk)?.payload).toMatchObject({ type: "declined", reasons: ["Price has moved since this offer"] });
     const [chat] = wrapChat(a.sk, a.pk, b.pk, root, "hello");
     expect(openWrap(chat, b.sk)?.text).toBe("hello");
   });
