@@ -117,14 +117,14 @@ export function HomeScreen() {
             <Feather name="plus-circle" size={22} color={c.primary} />
             <Text variant="heading">Buy bitcoin</Text>
             <Text variant="caption" muted>
-              Pay with mobile money or bank
+              Pay an agent with cash or mobile money
             </Text>
           </Card>
           <Card style={{ flex: 1 }} onPress={() => nav.navigate("NewSwap", { direction: "btc_to_fiat" })}>
             <Feather name="minus-circle" size={22} color={c.accent} />
             <Text variant="heading">Sell bitcoin</Text>
             <Text variant="caption" muted>
-              Get cash to your phone or bank
+              Get cash or mobile money from an agent
             </Text>
           </Card>
         </View>

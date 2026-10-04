@@ -7,7 +7,7 @@ import type { SwapRecord } from "../store/swaps";
 import { fiatSender, type SwapState } from "../protocol/swap";
 import type { Tone } from "../ui/components";
 
-export const STEPS = ["Requested", "Accepted", "Bitcoin locked", "Fiat sent", "Fiat confirmed", "Complete"];
+export const STEPS = ["Requested", "Accepted", "Bitcoin locked", "Payment sent", "Payment confirmed", "Complete"];
 
 const STEP_OF: Record<string, number> = {
   proposed: 0,
@@ -51,6 +51,7 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
   const fiat = fiatLabel(st);
   const sats = formatSats(root.terms.bitcoin.amount);
   const channel = channelInfo(root.terms.payment_channel).short;
+  const cash = channelInfo(root.terms.payment_channel).fields.length === 0;
   const them = isAgent ? "the customer" : rec.local.counterpartyName || "the agent";
   const title = isAgent
     ? buying
@@ -103,7 +104,9 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
       return v(`Waiting for ${fiat}`, `${capital(them)} is sending you ${fiat} via ${channel}.`, "info");
     case "fiat_sent":
       if (iPayFiat) return v("Waiting for confirmation", `${capital(them)} is checking for your ${fiat}.`, "info");
-      return v(`Check your ${channel}`, `${capital(them)} says they sent ${fiat}. Confirm only once it's in your account.`, "accent", true, "confirm");
+      return cash
+        ? v(`Collect ${fiat}`, `${capital(them)} says they paid ${fiat} in cash. Confirm only once you have it.`, "accent", true, "confirm")
+        : v(`Check your ${channel}`, `${capital(them)} says they sent ${fiat}. Confirm only once it's in your account.`, "accent", true, "confirm");
     case "fiat_confirmed":
     case "settlement_authorized":
       return v("Releasing bitcoin", iPayFiat ? `Your ${sats} are on the way.` : "Bitcoin is being released.", "info");
@@ -122,8 +125,9 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
   }
 }
 
+/** "the agent" -> "The agent", but people's chosen names stay as they wrote them. */
 function capital(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  return s.startsWith("the ") ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 export function shortPk(pk: string) {

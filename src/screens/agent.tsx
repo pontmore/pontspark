@@ -84,7 +84,7 @@ export function DeskScreen() {
         <View style={{ flexDirection: "row", gap: space.md }}>
           <Stat label="Liquidity" value={balance === null ? "…" : formatSats(balance)} />
           <Stat label="Completed" value={`${completed.length}`} />
-          <Stat label="Volume" value={formatSats(volume).replace(" sats", "")} />
+          <Stat label="Volume" value={formatSats(volume)} />
         </View>
       </View>
 

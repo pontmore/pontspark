@@ -298,7 +298,7 @@ export function ReviewSwapScreen() {
           : [
               ["lock", `Your ${formatSats(q.sats)} are locked, not sent. The agent can't take them yet.`],
               ["send", `The agent sends ${fiat} to your ${ch.short}.`],
-              ["unlock", "You release the bitcoin only after the money is in your account. If it never arrives, the lock returns to you."],
+              ["unlock", "You release the bitcoin only after you have the money. If it never arrives, the lock returns to you."],
             ]
         ).map(([icon, text]) => (
           <View key={icon} style={{ flexDirection: "row", gap: space.md }}>

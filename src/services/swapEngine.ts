@@ -460,7 +460,7 @@ async function sendInvoice(id: string): Promise<boolean> {
     amountSats: BigInt(st.root.terms.bitcoin.amount),
     paymentHash: hash,
     expirySecs: st.root.terms.deadlines.fiat_pay_by - now(),
-    description: `Pontmore swap ${id.slice(0, 8)}`,
+    description: `Pontspark swap ${id.slice(0, 8)}`,
   });
   await send(id, { type: "invoice", bolt11 });
   return true;

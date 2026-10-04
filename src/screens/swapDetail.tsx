@@ -38,8 +38,8 @@ const ACTION_LABELS: Record<string, string> = {
   "core/cancel": "Cancelled",
   "core/expire": "Expired",
   "core/secure": "Bitcoin locked",
-  "swap/fiat_sent": "Fiat marked sent",
-  "swap/fiat_confirmed": "Fiat confirmed",
+  "swap/fiat_sent": "Payment marked sent",
+  "swap/fiat_confirmed": "Payment confirmed",
   "core/authorize_settlement": "Release authorized",
   "core/settle": "Settled",
   "core/authorize_refund": "Refund authorized",
@@ -154,7 +154,7 @@ export function SwapDetailScreen() {
     st.status === "proposed"
       ? { label: "Agent replies within", at: root.expiresAt }
       : st.status === "secured" || st.status === "accepted"
-        ? { label: "Fiat due within", at: root.terms.deadlines.fiat_pay_by }
+        ? { label: "Payment due within", at: root.terms.deadlines.fiat_pay_by }
         : st.status === "fiat_sent"
           ? { label: "Confirmation due within", at: root.terms.deadlines.fiat_confirm_by }
           : null;
@@ -189,7 +189,9 @@ export function SwapDetailScreen() {
           onPress={() =>
             Alert.alert(
               "Release the bitcoin?",
-              `Only continue if ${view.fiatLabel} is actually in your ${ch.short} account. This can't be undone.`,
+              ch.fields.length
+                ? `Only continue if ${view.fiatLabel} is actually in your ${ch.short} account. This can't be undone.`
+                : `Only continue if you have the ${view.fiatLabel} in hand. This can't be undone.`,
               [
                 { text: "Not yet", style: "cancel" },
                 { text: "Yes, release", onPress: () => void run("confirm", () => engine.confirmAndRelease(id), "Bitcoin released") },
@@ -270,8 +272,8 @@ export function SwapDetailScreen() {
         <Section title={st.status === "secured" ? "Send the money to" : "You sent the money to"}>
           {payTo ? (
             <Card>
-              <Row icon="smartphone" title={ch.label} subtitle={`Amount: ${view.fiatLabel}`} />
-              <CopyField value={root.terms.fiat.amount} label="Amount" />
+              <Row icon={ch.fields.length ? "smartphone" : "dollar-sign"} title={ch.label} subtitle={`Amount: ${view.fiatLabel}`} />
+              {ch.fields.length > 0 && <CopyField value={root.terms.fiat.amount} label="Amount" />}
               {describeDetails(payTo.channel, payTo.details).map((d) =>
                 d.copyValue ? <CopyField key={d.label} value={d.copyValue} display={d.value} label={d.label} /> : <KeyValue key={d.label} label={d.label} value={d.value} />,
               )}
@@ -301,7 +303,7 @@ export function SwapDetailScreen() {
 
       <Section title="Details">
         <Card>
-          <KeyValue label={root.terms.direction === "fiat_to_btc" ? "Fiat" : "Fiat"} value={view.fiatLabel} />
+          <KeyValue label="Amount" value={view.fiatLabel} />
           <KeyValue label="Bitcoin" value={formatSats(root.terms.bitcoin.amount)} />
           <KeyValue
             label="Rate"
@@ -343,13 +345,31 @@ export function SwapDetailScreen() {
 
       <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
         {canCancel && (
-          <Button small kind="secondary" title={isAgent ? "Cancel swap" : "Cancel request"} loading={busy === "cancel"} onPress={() => run("cancel", () => engine.cancelSwap(id), "Cancelled")} />
+          <Button
+            small
+            kind="secondary"
+            title={isAgent ? "Cancel swap" : "Cancel request"}
+            loading={busy === "cancel"}
+            onPress={() =>
+              Alert.alert(
+                isAgent ? "Cancel this swap?" : "Cancel this request?",
+                st.status === "proposed"
+                  ? `${them} won't be able to accept it.`
+                  : "The swap stops here. Any locked bitcoin goes back to its owner when the lock expires.",
+                [
+                  { text: "Keep it", style: "cancel" },
+                  { text: "Cancel swap", style: "destructive", onPress: () => void run("cancel", () => engine.cancelSwap(id), "Cancelled") },
+                ],
+              )
+            }
+          />
         )}
         {canDispute && <Button small kind="danger" icon="flag" title="Report a problem" onPress={() => setDisputeOpen(true)} />}
       </View>
 
       <ReferenceSheet
         visible={refOpen}
+        cash={ch.fields.length === 0}
         label={ch.referenceLabel}
         required={ch.referenceRequired}
         onClose={() => setRefOpen(false)}
@@ -386,12 +406,14 @@ export function SwapDetailScreen() {
   );
 }
 
-function ReferenceSheet({ visible, label, required, onClose, onSubmit, busy }: { visible: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string) => void; busy: boolean }) {
+function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, busy }: { visible: boolean; cash: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string) => void; busy: boolean }) {
   const [ref, setRef] = useState("");
   return (
     <Sheet visible={visible} onClose={onClose} title="Payment sent">
       <Text variant="caption" muted>
-        Add the {label.toLowerCase()} from your confirmation message so the other side can find your payment. It's shared privately.
+        {cash
+          ? "Add a note if it helps the other side match your cash, like where you met. It's shared privately."
+          : `Add the ${label.toLowerCase()} from your confirmation message so the other side can find your payment. It's shared privately.`}
       </Text>
       <Field label={required ? label : `${label} (optional)`} value={ref} onChangeText={setRef} autoCapitalize="characters" autoCorrect={false} placeholder="e.g. QJK3XY8Z1P" />
       <Button title="Confirm sent" disabled={required && ref.trim().length < 2} loading={busy} onPress={() => onSubmit(ref)} />
@@ -411,8 +433,8 @@ function ResolvePanel({ id, busy, run }: { id: string; busy: string | null; run:
         {(
           [
             ["resume", "Resume", "Continue where the swap left off", "play"],
-            ["authorize_settlement", "Settle", "Fiat was paid: release the bitcoin", "check-circle"],
-            ["authorize_refund", "Refund", "Fiat wasn't paid: return the bitcoin", "rotate-ccw"],
+            ["authorize_settlement", "Settle", "The payment was made: release the bitcoin", "check-circle"],
+            ["authorize_refund", "Refund", "The payment wasn't made: return the bitcoin", "rotate-ccw"],
             ["cancel", "Cancel", "Call the swap off", "x-circle"],
           ] as const
         ).map(([effect, title, sub, icon]) => (

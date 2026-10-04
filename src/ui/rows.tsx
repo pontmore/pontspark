@@ -7,7 +7,7 @@ import { useMe } from "../hooks";
 import type { SwapItem } from "../hooks";
 import { describeSwap, STEPS, timeAgo } from "../lib/swapView";
 import { formatSatsShort } from "../lib/money";
-import { unreadCount } from "../store/swaps";
+import { unreadCount, useSwaps } from "../store/swaps";
 import type { WalletTx } from "../services/wallet";
 import { Avatar, Badge, Pulse, Row, Text, toneColors } from "./components";
 import { space, useColors } from "./theme";
@@ -77,11 +77,23 @@ export function Steps({ step, tone }: { step: number; tone: "danger" | string })
   );
 }
 
+/** Swap escrow payments carry "Pontspark swap <id prefix>" (or the older "Pontmore swap"). */
+function useSwapLabel(tx: WalletTx): string | null {
+  const prefix = tx.description?.match(/^Pont(?:spark|more) swap ([0-9a-f]{8})$/)?.[1];
+  const rec = useSwaps((s) => (prefix ? Object.values(s.records).find((r) => r.id.startsWith(prefix)) : undefined));
+  if (!prefix) return null;
+  const who = rec?.local.counterpartyName;
+  const bought = tx.direction === "in";
+  return who ? (bought ? `Bought from ${who}` : `Sold to ${who}`) : bought ? "Bought bitcoin" : "Sold bitcoin";
+}
+
 export function TxRow({ tx, fiat, hidden }: { tx: WalletTx; fiat?: string | null; hidden?: boolean }) {
   const c = useColors();
   const incoming = tx.direction === "in";
+  const swapLabel = useSwapLabel(tx);
   const label =
-    tx.kind === "htlc"
+    swapLabel ??
+    (tx.kind === "htlc"
       ? incoming
         ? tx.htlc?.status === "waiting"
           ? "Swap lock (incoming)"
@@ -91,9 +103,9 @@ export function TxRow({ tx, fiat, hidden }: { tx: WalletTx; fiat?: string | null
           : tx.htlc?.status === "waiting"
             ? "Locked for swap"
             : "Swap sent"
-      : tx.description || (incoming ? "Received" : "Sent");
+      : tx.description || (incoming ? "Received" : "Sent"));
   const icon: React.ComponentProps<typeof Feather>["name"] =
-    tx.kind === "htlc" ? "lock" : tx.kind === "onchain" ? "link" : incoming ? "arrow-down-left" : "arrow-up-right";
+    tx.kind === "htlc" || swapLabel ? "repeat" : tx.kind === "onchain" ? "link" : incoming ? "arrow-down-left" : "arrow-up-right";
   const date = new Date(tx.timestamp * 1000);
   return (
     <Row
