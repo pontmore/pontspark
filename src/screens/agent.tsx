@@ -3,7 +3,8 @@ import { useNavigation } from "@react-navigation/native";
 import React, { useMemo, useState } from "react";
 import { ScrollView, View } from "react-native";
 
-import { useActiveSwaps, useSwapList } from "../hooks";
+import { useActiveSwaps, useNow, useSwapList } from "../hooks";
+import { earningsIn } from "../lib/earnings";
 import { channelInfo, channelsForCurrency, currencyInfo, CURRENCIES, detailsComplete, validateDetails, type ChannelDetails } from "../lib/channels";
 import { formatDecimal, formatSats, isDecimalAmount, priceWithSpread } from "../lib/money";
 import { timeAgo } from "../lib/swapView";
@@ -33,7 +34,9 @@ export function DeskScreen() {
   const requests = active.filter((i) => i.st.status === "proposed");
   const running = active.filter((i) => i.st.status !== "proposed");
   const completed = all.filter((i) => i.st.status === "settled");
-  const volume = completed.reduce((sum, i) => sum + Number(i.st.root.terms.bitcoin.amount), 0);
+  const now = useNow(60_000);
+  const earnCurrency = markets[0]?.currency ?? "KES";
+  const earned = useMemo(() => earningsIn(completed, earnCurrency, now), [completed, earnCurrency, now]);
 
   if (!configured) {
     return (
@@ -82,11 +85,28 @@ export function DeskScreen() {
         </View>
         <Button title={online ? "Go offline" : "Go online"} kind={online ? "secondary" : "primary"} loading={busy} onPress={() => toggle(!online)} />
         <View style={{ flexDirection: "row", gap: space.md }}>
+          <Stat label="Earned today" value={money(earned.currency, earned.today)} />
+          <Stat label="Streak" value={earned.streakDays ? `${earned.streakDays} day${earned.streakDays === 1 ? "" : "s"}` : "—"} />
           <Stat label="Liquidity" value={balance === null ? "…" : formatSats(balance)} />
-          <Stat label="Completed" value={`${completed.length}`} />
-          <Stat label="Volume" value={formatSats(volume)} />
         </View>
       </View>
+
+      {completed.length > 0 && (
+        <Card style={{ flexDirection: "row", alignItems: "center" }}>
+          <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", backgroundColor: c.primarySoft }}>
+            <Feather name="trending-up" size={18} color={c.primary} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text variant="label">
+              {money(earned.currency, earned.week)} this week · {money(earned.currency, earned.total)} all time
+            </Text>
+            <Text variant="caption" muted>
+              {earned.swapsToday} swap{earned.swapsToday === 1 ? "" : "s"} today · {completed.length} in total
+              {earned.streakDays > 1 ? ` · ${earned.streakDays}-day streak, keep it going` : ""}
+            </Text>
+          </View>
+        </Card>
+      )}
 
       {online && <Text variant="caption" faint center>Keep Pontspark open while you're online so you can respond to requests.</Text>}
 
@@ -124,6 +144,11 @@ export function DeskScreen() {
       {keys && <AgentShareSheet pk={keys.identity.pk} name={name} visible={share} onClose={() => setShare(false)} />}
     </Screen>
   );
+}
+
+/** Margins on small swaps are fractions of a shilling, so show cents. */
+function money(currency: string, amount: number) {
+  return `${currency} ${amount.toFixed(2)}`;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

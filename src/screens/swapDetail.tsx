@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMe, useNow, useSwap } from "../hooks";
 import { channelInfo, describeDetails } from "../lib/channels";
 import { formatDecimal, formatSats } from "../lib/money";
+import { settledAt, swapProfit } from "../lib/earnings";
 import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
 import { npub } from "../lib/links";
 import { type DisputeClass } from "../protocol/constants";
@@ -18,6 +19,7 @@ import { fetchProfile } from "../services/discovery";
 import * as engine from "../services/swapEngine";
 import { chatOf, payloadFrom, unreadCount, useSwaps } from "../store/swaps";
 import { Avatar, Badge, Button, Card, Chip, Collapsible, Field, Header, Notice, Row, Screen, Section, Spinner, Text, success, toneColors } from "../ui/components";
+import { SwapCelebration } from "../ui/celebrate";
 import { CopyField, Sheet, confirm, dismissConfirm, toast, toastError } from "../ui/extras";
 import { KeyValue, Steps } from "../ui/rows";
 import { radius, space, useColors } from "../ui/theme";
@@ -75,6 +77,14 @@ export function SwapDetailScreen() {
   useCounterpartyName(id, counterparty, item?.rec.local.counterpartyName);
 
   const status = item?.st.status;
+  // Celebrate a swap that just finished, once; not one opened from history.
+  const fresh = (i: typeof item) => !!i && i.st.status === "settled" && !i.rec.local.celebratedAt && Math.floor(Date.now() / 1000) - (settledAt(i.st) ?? 0) < 15 * 60;
+  const [celebrate, setCelebrate] = useState(() => fresh(item));
+  useEffect(() => {
+    if (!item || status !== "settled" || item.rec.local.celebratedAt) return;
+    if (fresh(item)) setCelebrate(true);
+    useSwaps.getState().patchLocal(item.rec.id, { celebratedAt: Math.floor(Date.now() / 1000) });
+  }, [item, status]);
   // A question asked about the old state shouldn't be answerable in the new one.
   useEffect(() => dismissConfirm(), [status]);
   const iReceiveBtc = item ? bitcoinProvider(item.st.root) !== me : false;
@@ -92,7 +102,6 @@ export function SwapDetailScreen() {
       alive = false;
       clearInterval(t);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, status, iReceiveBtc, item?.rec.inbox.length]);
 
   if (!item) {
@@ -163,6 +172,7 @@ export function SwapDetailScreen() {
 
   const canCancel =
     !st.disputed && ((st.status === "proposed" && root.proposer === me && now < root.expiresAt) || (st.status === "accepted" && !rec.local.lockStartedAt && !payloadFrom(rec, bitcoinProvider(root), "locked")));
+  const profit = swapProfit(rec, st);
   const checkingLock = iReceiveBtc && st.status === "secured" && !lock?.ok;
   const canDispute = !st.disputed && !view.done && st.status !== "proposed";
   // Only offer problems this side could actually have.
@@ -233,6 +243,20 @@ export function SwapDetailScreen() {
       footer={primary}
       onRefresh={() => void engine.refreshSwap(id)}
     >
+      {st.status === "settled" ? (
+        <SwapCelebration
+          play={celebrate}
+          fiatCode={root.terms.fiat.currency}
+          amountLabel={iReceiveBtc ? `+${view.satsLabel}` : `+${view.fiatLabel}`}
+          caption={
+            profit !== null
+              ? `You earned ≈ ${root.terms.fiat.currency} ${profit.toFixed(2)} on this swap`
+              : iReceiveBtc
+                ? `Paid ${view.fiatLabel} to ${them}`
+                : `Sold ${view.satsLabel} to ${them}`
+          }
+        />
+      ) : null}
       <View style={{ gap: space.md }}>
         <Badge label={view.title.toUpperCase()} tone="neutral" />
         <Text variant="display">{checkingLock ? "Checking the lock" : view.headline}</Text>

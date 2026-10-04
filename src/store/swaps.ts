@@ -26,6 +26,8 @@ export interface SwapLocal {
   lastReadAt?: number;
   problems?: string[];
   lastError?: string;
+  /** The completion animation already played for this swap. */
+  celebratedAt?: number;
 }
 
 export interface SwapRecord {
