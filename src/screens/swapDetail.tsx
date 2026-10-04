@@ -149,13 +149,14 @@ export function SwapDetailScreen() {
     }
   })();
 
+  // Say who the clock is for: "You pay within" vs "robotop pays within".
   const deadline =
     st.status === "proposed"
-      ? { label: "Agent replies within", at: root.expiresAt }
+      ? { label: `${them} replies within`, at: root.expiresAt }
       : st.status === "secured" || st.status === "accepted"
-        ? { label: "Payment due within", at: root.terms.deadlines.fiat_pay_by }
+        ? { label: iPayFiat ? "Pay within" : `${them} pays within`, at: root.terms.deadlines.fiat_pay_by }
         : st.status === "fiat_sent"
-          ? { label: "Confirmation due within", at: root.terms.deadlines.fiat_confirm_by }
+          ? { label: iReceiveFiat ? "Confirm within" : `${them} confirms within`, at: root.terms.deadlines.fiat_confirm_by }
           : null;
 
   const canCancel =
@@ -294,7 +295,6 @@ export function SwapDetailScreen() {
         <Card tone="accent">
           <Text variant="label">Look for</Text>
           <KeyValue label="Amount" value={view.fiatLabel} />
-          <KeyValue label="Channel" value={ch.label} />
           {theirRef && <KeyValue label={ch.referenceLabel} value={theirRef} />}
           {payTo && describeDetails(payTo.channel, payTo.details).map((d) => <KeyValue key={d.label} label={`Into ${d.label.toLowerCase()}`} value={d.value} />)}
         </Card>

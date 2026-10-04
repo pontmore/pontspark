@@ -115,7 +115,7 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
     case "settlement_authorized":
       return v("Releasing bitcoin", iPayFiat ? `Your ${sats} are on the way.` : "Bitcoin is being released.", "info");
     case "settled":
-      return v("Complete", iPayFiat ? `You received ${sats}.` : `You received ${fiat}.`, "success");
+      return v("Done", iPayFiat ? `You got ${sats} for ${fiat}.` : `You got ${fiat} for ${sats}.`, "success");
     case "refund_authorized":
       return v("Refunding", "The locked bitcoin goes back to its owner when the lock expires.", "warning");
     case "refunded":
