@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/pontmore/pontspark/compare/v0.2.0...v0.2.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* parse APK signer output across build-tools formats ([8a2e47b](https://github.com/pontmore/pontspark/commit/8a2e47b3107c61b2f4b787c67152aebc61cf404c))
+
 ## [0.2.0](https://github.com/pontmore/pontspark/compare/v0.1.1...v0.2.0) (2026-10-04)
 
 
