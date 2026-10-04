@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMe, useNow, useSwap } from "../hooks";
 import { channelInfo, describeDetails } from "../lib/channels";
 import { formatDecimal, formatSats } from "../lib/money";
-import { settledAt, swapProfit } from "../lib/earnings";
+import { swapProfit } from "../lib/earnings";
 import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
 import { npub } from "../lib/links";
 import { type DisputeClass } from "../protocol/constants";
@@ -77,14 +77,6 @@ export function SwapDetailScreen() {
   useCounterpartyName(id, counterparty, item?.rec.local.counterpartyName);
 
   const status = item?.st.status;
-  // Celebrate a swap that just finished, once; not one opened from history.
-  const fresh = (i: typeof item) => !!i && i.st.status === "settled" && !i.rec.local.celebratedAt && Math.floor(Date.now() / 1000) - (settledAt(i.st) ?? 0) < 15 * 60;
-  const [celebrate, setCelebrate] = useState(() => fresh(item));
-  useEffect(() => {
-    if (!item || status !== "settled" || item.rec.local.celebratedAt) return;
-    if (fresh(item)) setCelebrate(true);
-    useSwaps.getState().patchLocal(item.rec.id, { celebratedAt: Math.floor(Date.now() / 1000) });
-  }, [item, status]);
   // A question asked about the old state shouldn't be answerable in the new one.
   useEffect(() => dismissConfirm(), [status]);
   const iReceiveBtc = item ? bitcoinProvider(item.st.root) !== me : false;
@@ -247,7 +239,7 @@ export function SwapDetailScreen() {
         <Badge label={view.title.toUpperCase()} tone="neutral" />
         {st.status === "settled" ? (
           <SwapCelebration
-            play={celebrate}
+            play={false}
             fiatCode={root.terms.fiat.currency}
             amountLabel={iReceiveBtc ? `+${view.satsLabel}` : `+${view.fiatLabel}`}
             caption={

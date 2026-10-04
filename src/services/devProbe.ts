@@ -9,6 +9,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 import { errorText } from "../lib/errors";
+import { celebrate } from "../ui/celebrate";
 import { connect } from "./wallet";
 
 const PREIMAGE = "11".repeat(32);
@@ -67,6 +68,9 @@ async function run(url: string) {
         log("claimed", res.payment);
         break;
       }
+      case "celebrate":
+        celebrate({ fiatCode: "KES", amountLabel: q("amount") || "+176 sats", caption: q("caption") || "Bought from robotop for KES 20" });
+        break;
       default:
         log("unknown probe", path);
     }

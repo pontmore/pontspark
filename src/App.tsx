@@ -12,6 +12,8 @@ import { resumeEngine, startEngine, stopEngine } from "./services/swapEngine";
 import { useSession } from "./store/session";
 import { useWallet } from "./store/wallet";
 import { Logo } from "./ui/components";
+import { useCelebrateFinishedSwaps } from "./hooks";
+import { CelebrationHost } from "./ui/celebrate";
 import { ConfirmHost, ToastHost } from "./ui/extras";
 import { useColors, useIsDark } from "./ui/theme";
 
@@ -56,6 +58,7 @@ export default function App() {
   const dark = useIsDark();
   const phase = useSession((s) => s.phase);
   useBoot();
+  useCelebrateFinishedSwaps();
 
   useEffect(() => {
     SystemUI.setBackgroundColorAsync(c.bg).catch(() => undefined);
@@ -72,6 +75,7 @@ export default function App() {
         ) : (
           <RootNavigator />
         )}
+        <CelebrationHost />
         <ConfirmHost />
         <ToastHost />
       </SafeAreaProvider>

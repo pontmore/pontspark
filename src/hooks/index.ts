@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { formatFiat } from "../lib/money";
+import { settledAt, swapProfit } from "../lib/earnings";
+import { formatDecimal, formatFiat, formatSats } from "../lib/money";
 import { currencyInfo } from "../lib/channels";
-import { isTerminal } from "../protocol/swap";
+import { bitcoinProvider, isTerminal } from "../protocol/swap";
 import { useSession } from "../store/session";
 import { swapState, useSwaps, type SwapRecord } from "../store/swaps";
 import { useWallet } from "../store/wallet";
+import { celebrate } from "../ui/celebrate";
 import type { SwapState } from "../protocol/swap";
 
 export function useNow(intervalMs = 1000): number {
@@ -79,4 +81,47 @@ export function useFiatOf(): (sats: number | bigint) => string | null {
 
 export function useMe(): string {
   return useSession((s) => s.keys?.identity.pk ?? "");
+}
+
+/**
+ * Celebrate each swap the moment it completes, on whatever screen the person
+ * is: once per swap, and only for swaps that finished in the last 15 minutes
+ * (not ones that arrive later from relays or a restore).
+ */
+export function useCelebrateFinishedSwaps() {
+  const me = useMe();
+  const records = useSwaps((s) => s.records);
+  useEffect(() => {
+    if (!me) return;
+    const now = Math.floor(Date.now() / 1000);
+    for (const rec of Object.values(records)) {
+      if (rec.local.celebratedAt) continue;
+      let st: SwapState;
+      try {
+        st = swapState(rec);
+      } catch {
+        continue;
+      }
+      if (st.status !== "settled") continue;
+      useSwaps.getState().patchLocal(rec.id, { celebratedAt: now });
+      const at = settledAt(st);
+      if (at === null || now - at > 15 * 60) continue;
+      const getsBitcoin = bitcoinProvider(st.root) !== me;
+      const fiat = `${st.root.terms.fiat.currency} ${formatDecimal(st.root.terms.fiat.amount, 0)}`;
+      const sats = formatSats(st.root.terms.bitcoin.amount);
+      const them = rec.local.counterpartyName || (rec.role === "agent" ? "the customer" : "the agent");
+      const profit = swapProfit(rec, st);
+      celebrate({
+        fiatCode: st.root.terms.fiat.currency,
+        amountLabel: getsBitcoin ? `+${sats}` : `+${fiat}`,
+        caption:
+          profit !== null
+            ? `You earned ≈ ${st.root.terms.fiat.currency} ${profit.toFixed(2)}`
+            : getsBitcoin
+              ? `Bought from ${them} for ${fiat}`
+              : `Sold ${sats} to ${them}`,
+      });
+      return; // one at a time
+    }
+  }, [records, me]);
 }

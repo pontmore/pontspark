@@ -6,7 +6,8 @@
  */
 import { Feather } from "@expo/vector-icons";
 import React, { useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, Animated, Easing, View } from "react-native";
+import { AccessibilityInfo, Animated, Easing, Modal, Pressable, View } from "react-native";
+import { create } from "zustand";
 
 import { Text, success } from "./components";
 import { useColors } from "./theme";
@@ -14,8 +15,22 @@ import { useColors } from "./theme";
 const SPARKS = 14;
 const SIZE = 132;
 
-export function SwapCelebration({ fiatCode, amountLabel, caption, play }: { fiatCode: string; amountLabel: string; caption?: string; play: boolean }) {
+export function SwapCelebration({
+  fiatCode,
+  amountLabel,
+  caption,
+  play,
+  onBrand = false,
+}: {
+  fiatCode: string;
+  amountLabel: string;
+  caption?: string;
+  play: boolean;
+  /** Drawn on the full-screen green takeover rather than the page. */
+  onBrand?: boolean;
+}) {
   const c = useColors();
+  const ink = onBrand ? "#ffffff" : c.primary;
   const meet = useRef(new Animated.Value(play ? 0 : 1)).current;
   const pop = useRef(new Animated.Value(play ? 0 : 1)).current;
   const burst = useRef(new Animated.Value(play ? 0 : 1)).current;
@@ -88,7 +103,7 @@ export function SwapCelebration({ fiatCode, amountLabel, caption, play }: { fiat
               width: s.size,
               height: s.size,
               borderRadius: s.size,
-              backgroundColor: s.warm ? c.accent : c.primary,
+              backgroundColor: s.warm ? c.accent : ink,
               opacity: burst.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 1, 0] }),
               transform: [
                 { translateX: burst.interpolate({ inputRange: [0, 1], outputRange: [0, Math.cos(s.angle) * s.reach] }) },
@@ -99,32 +114,83 @@ export function SwapCelebration({ fiatCode, amountLabel, caption, play }: { fiat
           />
         ))}
         {coin(-1, "₿", "#f7931a", "#ffffff")}
-        {coin(1, fiatCode, c.accent, "#1d1408")}
+        {coin(1, fiatCode, onBrand ? "#ffffff" : c.primary, onBrand ? c.primary : "#ffffff")}
         <Animated.View
           style={{
             width: 88,
             height: 88,
             borderRadius: 44,
-            backgroundColor: c.primary,
+            backgroundColor: ink,
             alignItems: "center",
             justifyContent: "center",
             opacity: pop,
             transform: [{ scale: pop.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) }],
           }}
         >
-          <Feather name="check" size={44} color="#ffffff" />
+          <Feather name="check" size={44} color={onBrand ? c.primary : "#ffffff"} />
         </Animated.View>
       </View>
       <Animated.View style={{ alignItems: "center", gap: 2, opacity: pop, transform: [{ translateY: pop.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] }}>
-        <Text variant="title" color={c.primary}>
+        <Text variant={onBrand ? "hero" : "title"} color={ink}>
           {amountLabel}
         </Text>
         {caption ? (
-          <Text variant="caption" muted>
-            {caption}
-          </Text>
+          onBrand ? (
+            <Text variant="body" color="#ffffff" center>
+              {caption}
+            </Text>
+          ) : (
+            <Text variant="caption" muted center>
+              {caption}
+            </Text>
+          )
         ) : null}
       </Animated.View>
     </View>
+  );
+}
+
+// -- full-screen moment ------------------------------------------------------------
+
+export interface Moment {
+  fiatCode: string;
+  amountLabel: string;
+  caption: string;
+}
+
+const useMoment = create<{ current: Moment | null }>(() => ({ current: null }));
+
+/** Take over the screen for a couple of seconds, wherever the person is in the app. */
+export function celebrate(m: Moment) {
+  useMoment.setState({ current: m });
+}
+
+export function CelebrationHost() {
+  const current = useMoment((s) => s.current);
+  const c = useColors();
+  const fade = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!current) return;
+    fade.setValue(0);
+    Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    const t = setTimeout(() => close(), 2800);
+    return () => clearTimeout(t);
+  }, [current]);
+  const close = () => Animated.timing(fade, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => useMoment.setState({ current: null }));
+  if (!current) return null;
+  return (
+    <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={close}>
+      <Animated.View style={{ flex: 1, opacity: fade, backgroundColor: c.primary }}>
+        <Pressable onPress={close} style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, gap: 12 }} accessibilityRole="button" accessibilityLabel="Close">
+          <Text variant="label" color="#ffffff" style={{ opacity: 0.85, letterSpacing: 1 }}>
+            SWAP COMPLETE
+          </Text>
+          <SwapCelebration play onBrand fiatCode={current.fiatCode} amountLabel={current.amountLabel} caption={current.caption} />
+        </Pressable>
+        <Text variant="caption" color="#ffffff" center style={{ opacity: 0.7, paddingBottom: 48 }}>
+          Pontspark
+        </Text>
+      </Animated.View>
+    </Modal>
   );
 }
