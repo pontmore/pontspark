@@ -1,6 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AccessibilityInfo,
@@ -264,6 +264,38 @@ export function Section({ title, action, children }: { title?: string; action?: 
         </View>
       )}
       {children}
+    </View>
+  );
+}
+
+/** A section whose body opens on tap; secondary detail stays out of the way until wanted. */
+export function Collapsible({ title, summary, children, initiallyOpen = false }: { title: string; summary?: string; children: React.ReactNode; initiallyOpen?: boolean }) {
+  const c = useColors();
+  const [open, setOpen] = useState(initiallyOpen);
+  return (
+    <View style={{ gap: space.sm }}>
+      <Pressable
+        onPress={() => {
+          tap();
+          setOpen(!open);
+        }}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 2, paddingVertical: 4 }}
+      >
+        <Text variant="tiny" muted style={{ textTransform: "uppercase" }}>
+          {title}
+        </Text>
+        {!open && summary ? (
+          <Text variant="caption" faint numberOfLines={1} style={{ flex: 1 }}>
+            {summary}
+          </Text>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+        <Feather name={open ? "chevron-up" : "chevron-down"} size={16} color={c.textMuted} />
+      </Pressable>
+      {open && children}
     </View>
   );
 }

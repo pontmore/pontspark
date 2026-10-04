@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import React, { useMemo, useState } from "react";
-import { Alert, ScrollView, View } from "react-native";
+import { ScrollView, View } from "react-native";
 
 import { useActiveSwaps, useSwapList } from "../hooks";
 import { channelInfo, channelsForCurrency, currencyInfo, CURRENCIES, detailsComplete, validateDetails, type ChannelDetails } from "../lib/channels";
@@ -12,7 +12,7 @@ import { defaultMarket, useAgent, type Market, type MarketSide } from "../store/
 import { useSession } from "../store/session";
 import { useWallet } from "../store/wallet";
 import { Badge, Button, Card, Chip, Empty, Field, IconButton, Notice, Pulse, Row, Screen, Section, Text, Toggle, success } from "../ui/components";
-import { Sheet, toast } from "../ui/extras";
+import { Sheet, confirm, toast } from "../ui/extras";
 import { ChannelFields } from "../ui/channelFields";
 import { SwapRow } from "../ui/rows";
 import { radius, space, useColors } from "../ui/theme";
@@ -283,10 +283,13 @@ function MarketSheet({ market, onClose, onSave, onRemove }: { market: Market; on
   // Back and tap-outside close the sheet; don't let them silently drop edits.
   const close = () => {
     if (!channelEdit && JSON.stringify(m) === JSON.stringify(market)) return onClose();
-    Alert.alert("Discard changes?", `Your changes to ${m.currency} haven't been saved.`, [
-      { text: "Keep editing", style: "cancel" },
-      { text: "Discard", style: "destructive", onPress: onClose },
-    ]);
+    void confirm({
+      title: "Discard changes?",
+      message: `Your changes to ${m.currency} haven't been saved.`,
+      confirmLabel: "Discard",
+      cancelLabel: "Keep editing",
+      tone: "danger",
+    }).then((ok) => ok && onClose());
   };
 
   return (
@@ -402,15 +405,16 @@ export function useConfirmLeaveAgent() {
   const setMode = useSession((s) => s.setMode);
   return () => {
     if (!useAgent.getState().online) return setMode("user");
-    Alert.alert("Go offline?", "Switching to user mode takes your offers offline.", [
-      { text: "Stay", style: "cancel" },
-      {
-        text: "Switch",
-        onPress: async () => {
-          await setAgentOnline(false).catch(() => undefined);
-          setMode("user");
-        },
-      },
-    ]);
+    void confirm({
+      title: "Go offline?",
+      message: "Switching to personal mode takes your offers offline until you come back.",
+      confirmLabel: "Switch to personal",
+      cancelLabel: "Stay an agent",
+      icon: "user",
+    }).then(async (ok) => {
+      if (!ok) return;
+      await setAgentOnline(false).catch(() => undefined);
+      setMode("user");
+    });
   };
 }

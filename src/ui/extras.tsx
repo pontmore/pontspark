@@ -8,7 +8,7 @@ import { create } from "zustand";
 
 import { errorText } from "../lib/errors";
 import { radius, space, useColors } from "./theme";
-import { Text, tap, success } from "./components";
+import { Button, Text, tap, success } from "./components";
 
 // -- number pad ------------------------------------------------------------------
 
@@ -142,6 +142,60 @@ export function toast(msg: string, kind: ToastKind = "info") {
 
 export function toastError(e: unknown) {
   toast(errorText(e), "error");
+}
+
+// -- confirm -----------------------------------------------------------------------
+
+export interface ConfirmOptions {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  /** "danger" for irreversible or destructive steps. */
+  tone?: "primary" | "danger";
+  icon?: React.ComponentProps<typeof Feather>["name"];
+}
+
+type ConfirmState = (ConfirmOptions & { resolve: (ok: boolean) => void }) | null;
+const useConfirmStore = create<{ current: ConfirmState }>(() => ({ current: null }));
+
+/** An in-app confirmation sheet in the app's own look, instead of the platform alert. */
+export function confirm(opts: ConfirmOptions): Promise<boolean> {
+  return new Promise((resolve) => {
+    useConfirmStore.getState().current?.resolve(false);
+    useConfirmStore.setState({ current: { ...opts, resolve } });
+  });
+}
+
+export function ConfirmHost() {
+  const current = useConfirmStore((s) => s.current);
+  const c = useColors();
+  const done = (ok: boolean) => {
+    current?.resolve(ok);
+    useConfirmStore.setState({ current: null });
+  };
+  const danger = current?.tone === "danger";
+  return (
+    <Sheet visible={!!current} onClose={() => done(false)}>
+      {current && (
+        <View style={{ gap: space.lg }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+            <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: danger ? c.dangerSoft : c.primarySoft }}>
+              <Feather name={current.icon ?? (danger ? "alert-triangle" : "check-circle")} size={20} color={danger ? c.danger : c.primary} />
+            </View>
+            <Text variant="title" style={{ flex: 1 }}>
+              {current.title}
+            </Text>
+          </View>
+          <Text muted>{current.message}</Text>
+          <View style={{ gap: space.sm }}>
+            <Button kind={danger ? "danger" : "primary"} title={current.confirmLabel} onPress={() => done(true)} />
+            <Button kind="secondary" title={current.cancelLabel ?? "Not now"} onPress={() => done(false)} />
+          </View>
+        </View>
+      )}
+    </Sheet>
+  );
 }
 
 export function ToastHost() {

@@ -12,7 +12,7 @@ import { resumeEngine, startEngine, stopEngine } from "./services/swapEngine";
 import { useSession } from "./store/session";
 import { useWallet } from "./store/wallet";
 import { Logo } from "./ui/components";
-import { ToastHost } from "./ui/extras";
+import { ConfirmHost, ToastHost } from "./ui/extras";
 import { useColors, useIsDark } from "./ui/theme";
 
 function useBoot() {
@@ -72,6 +72,7 @@ export default function App() {
         ) : (
           <RootNavigator />
         )}
+        <ConfirmHost />
         <ToastHost />
       </SafeAreaProvider>
     </GestureHandlerRootView>

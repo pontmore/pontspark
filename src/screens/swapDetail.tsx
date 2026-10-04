@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from "react-native";
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from "react-native";
 import type { Event } from "nostr-tools/pure";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -17,8 +17,8 @@ import { bitcoinProvider, fiatReceiver, fiatSender } from "../protocol/swap";
 import { fetchProfile } from "../services/discovery";
 import * as engine from "../services/swapEngine";
 import { chatOf, payloadFrom, unreadCount, useSwaps } from "../store/swaps";
-import { Avatar, Badge, Button, Card, Chip, Field, Header, Notice, Row, Screen, Section, Spinner, Text, success, toneColors } from "../ui/components";
-import { CopyField, Sheet, toast, toastError } from "../ui/extras";
+import { Avatar, Badge, Button, Card, Chip, Collapsible, Field, Header, Notice, Row, Screen, Section, Spinner, Text, success, toneColors } from "../ui/components";
+import { CopyField, Sheet, confirm, toast, toastError } from "../ui/extras";
 import { KeyValue, Steps } from "../ui/rows";
 import { radius, space, useColors } from "../ui/theme";
 
@@ -70,7 +70,6 @@ export function SwapDetailScreen() {
   const [refOpen, setRefOpen] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [lock, setLock] = useState<engine.LockCheck | null>(null);
-  const [showLog, setShowLog] = useState(false);
 
   const counterparty = item ? (item.rec.role === "agent" ? item.st.root.customer : item.st.root.agent) : undefined;
   useCounterpartyName(id, counterparty, item?.rec.local.counterpartyName);
@@ -186,18 +185,18 @@ export function SwapDetailScreen() {
           title={`I've received ${view.fiatLabel}`}
           icon="check-circle"
           loading={busy === "confirm"}
-          onPress={() =>
-            Alert.alert(
-              "Release the bitcoin?",
-              ch.fields.length
-                ? `Only continue if ${view.fiatLabel} is actually in your ${ch.short} account. This can't be undone.`
-                : `Only continue if you have the ${view.fiatLabel} in hand. This can't be undone.`,
-              [
-                { text: "Not yet", style: "cancel" },
-                { text: "Yes, release", onPress: () => void run("confirm", () => engine.confirmAndRelease(id), "Bitcoin released") },
-              ],
-            )
-          }
+          onPress={async () => {
+            const ok = await confirm({
+              title: `Release ${view.satsLabel}?`,
+              message: ch.fields.length
+                ? `Only continue once ${view.fiatLabel} is in your ${ch.short} account. Releasing can't be undone.`
+                : `Only continue once you have the ${view.fiatLabel} in hand. Releasing can't be undone.`,
+              confirmLabel: "Release bitcoin",
+              cancelLabel: "Not yet",
+              icon: "unlock",
+            });
+            if (ok) void run("confirm", () => engine.confirmAndRelease(id), "Bitcoin released");
+          }}
         />
       );
     if (view.action === "resolve") return <ResolvePanel id={id} busy={busy} run={run} />;
@@ -301,7 +300,7 @@ export function SwapDetailScreen() {
         </Card>
       )}
 
-      <Section title="Details">
+      <Collapsible title="Details" summary={`${view.fiatLabel} · ${formatSats(root.terms.bitcoin.amount)} · ${ch.short}`}>
         <Card>
           <KeyValue label="Amount" value={view.fiatLabel} />
           <KeyValue label="Bitcoin" value={formatSats(root.terms.bitcoin.amount)} />
@@ -316,15 +315,9 @@ export function SwapDetailScreen() {
           <KeyValue label={isAgent ? "Customer" : "Agent"} value={rec.local.counterpartyName ?? shortPk(counterparty!)} />
           <KeyValue label="Started" value={timeAgo(root.createdAt, now)} />
         </Card>
-      </Section>
+      </Collapsible>
 
-      <Pressable onPress={() => setShowLog(!showLog)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <Text variant="label" color={c.primary}>
-          {showLog ? "Hide" : "Show"} public record
-        </Text>
-        <Feather name={showLog ? "chevron-up" : "chevron-down"} size={16} color={c.primary} />
-      </Pressable>
-      {showLog && (
+      <Collapsible title="Public record">
         <Card>
           <Text variant="caption" muted>
             Every step is a signed Nostr event (Pontmore PIP-02, pontmore/swap@1). Payment details and secrets never appear here.
@@ -341,7 +334,7 @@ export function SwapDetailScreen() {
           <CopyField value={root.id} label="Coordination id" short />
           <CopyField value={npub(counterparty!)} label={isAgent ? "Customer npub" : "Agent npub"} short />
         </Card>
-      )}
+      </Collapsible>
 
       <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
         {canCancel && (
@@ -350,18 +343,20 @@ export function SwapDetailScreen() {
             kind="secondary"
             title={isAgent ? "Cancel swap" : "Cancel request"}
             loading={busy === "cancel"}
-            onPress={() =>
-              Alert.alert(
-                isAgent ? "Cancel this swap?" : "Cancel this request?",
-                st.status === "proposed"
-                  ? `${them} won't be able to accept it.`
-                  : "The swap stops here. Any locked bitcoin goes back to its owner when the lock expires.",
-                [
-                  { text: "Keep it", style: "cancel" },
-                  { text: "Cancel swap", style: "destructive", onPress: () => void run("cancel", () => engine.cancelSwap(id), "Cancelled") },
-                ],
-              )
-            }
+            onPress={async () => {
+              const ok = await confirm({
+                title: isAgent ? "Cancel this swap?" : "Cancel this request?",
+                message:
+                  st.status === "proposed"
+                    ? `${them} won't be able to accept it.`
+                    : "The swap stops here. Any locked bitcoin goes back to its owner when the lock expires.",
+                confirmLabel: "Cancel swap",
+                cancelLabel: "Keep it",
+                tone: "danger",
+                icon: "x-circle",
+              });
+              if (ok) void run("cancel", () => engine.cancelSwap(id), "Cancelled");
+            }}
           />
         )}
         {canDispute && <Button small kind="danger" icon="flag" title="Report a problem" onPress={() => setDisputeOpen(true)} />}

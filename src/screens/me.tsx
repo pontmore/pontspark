@@ -2,7 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import Constants from "expo-constants";
 import React, { useState } from "react";
-import { Alert, Linking, ScrollView, View } from "react-native";
+import { Linking, ScrollView, View } from "react-native";
 
 import { useNow, useSwapList } from "../hooks";
 import { currencyInfo, CURRENCIES } from "../lib/channels";
@@ -16,7 +16,7 @@ import { useSession } from "../store/session";
 import { useSwaps } from "../store/swaps";
 import { useWallet } from "../store/wallet";
 import { Avatar, Badge, Button, Card, Divider, Empty, Field, Notice, Row, Screen, Section, Segmented, Text, success } from "../ui/components";
-import { CopyField, Sheet, toast } from "../ui/extras";
+import { CopyField, Sheet, confirm, toast } from "../ui/extras";
 import { SwapRow } from "../ui/rows";
 import { space, useColors } from "../ui/theme";
 import { useConfirmLeaveAgent } from "./agent";
@@ -123,7 +123,6 @@ export function MeScreen() {
             onPress={() => setCurrencyOpen(true)}
           />
           <Divider />
-          <Row icon="clock" title="Payment history" chevron onPress={() => nav.navigate("Transactions")} />
         </Card>
       </Section>
 
@@ -264,23 +263,23 @@ export function SignOutScreen() {
           title="Remove from this phone"
           disabled={typed.trim().toLowerCase() !== "remove" || busy}
           loading={busy}
-          onPress={() =>
-            Alert.alert("Remove wallet?", "Without your recovery phrase this wallet is gone for good.", [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Remove",
-                style: "destructive",
-                onPress: async () => {
-                  setBusy(true);
-                  if (useAgent.getState().online) await setAgentOnline(false).catch(() => undefined);
-                  useAgent.getState().reset();
-                  useSwaps.getState().clear();
-                  useWallet.getState().reset();
-                  await signOut();
-                },
-              },
-            ])
-          }
+          onPress={async () => {
+            const ok = await confirm({
+              title: "Remove wallet?",
+              message: "Without your recovery phrase this wallet is gone for good.",
+              confirmLabel: "Remove wallet",
+              cancelLabel: "Keep it",
+              tone: "danger",
+              icon: "trash-2",
+            });
+            if (!ok) return;
+            setBusy(true);
+            if (useAgent.getState().online) await setAgentOnline(false).catch(() => undefined);
+            useAgent.getState().reset();
+            useSwaps.getState().clear();
+            useWallet.getState().reset();
+            await signOut();
+          }}
         />
       }
     >

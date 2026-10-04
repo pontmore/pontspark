@@ -7,11 +7,12 @@ import { useActiveSwaps, useFiatOf } from "../hooks";
 import { formatSatsShort } from "../lib/money";
 import { useSession } from "../store/session";
 import { useWallet } from "../store/wallet";
-import { ActionTile, Button, Card, Empty, IconButton, Notice, Screen, Section, Spinner, Text } from "../ui/components";
+import { ActionTile, Button, Card, Empty, Notice, Screen, Section, Spinner, Text } from "../ui/components";
 import { SwapRow, TxRow } from "../ui/rows";
 import { radius, space, useColors } from "../ui/theme";
 
-export function WalletHero({ showSwap }: { showSwap: boolean }) {
+/** Same card in both modes: buying and selling start from the cards below it. */
+export function WalletHero() {
   const c = useColors();
   const nav = useNavigation<any>();
   const { balance, status } = useWallet();
@@ -53,7 +54,6 @@ export function WalletHero({ showSwap }: { showSwap: boolean }) {
         <ActionTile tone="hero" icon="arrow-down" label="Receive" onPress={() => nav.navigate("Receive")} />
         <ActionTile tone="hero" icon="arrow-up" label="Send" onPress={() => nav.navigate("Send")} />
         <ActionTile tone="hero" icon="maximize" label="Scan" onPress={() => nav.navigate("Scan")} />
-        {showSwap && <ActionTile tone="hero" icon="repeat" label="Swap" onPress={() => nav.navigate("NewSwap", {})} />}
       </View>
     </View>
   );
@@ -87,10 +87,9 @@ export function HomeScreen() {
           </Text>
           <Text variant="title">{name || "Your wallet"}</Text>
         </View>
-        <IconButton name="clock" label="History" onPress={() => nav.navigate("Transactions")} />
       </View>
 
-      <WalletHero showSwap={mode === "user"} />
+      <WalletHero />
 
       {status === "error" && (
         <Notice tone="danger" title="Wallet offline" action={<Button small kind="secondary" title="Retry" onPress={() => useWallet.getState().start()} />}>
@@ -111,7 +110,7 @@ export function HomeScreen() {
         </Card>
       )}
 
-      {mode === "user" && active.length === 0 && (
+      {mode === "user" && (
         <View style={{ flexDirection: "row", gap: space.md }}>
           <Card style={{ flex: 1 }} onPress={() => nav.navigate("NewSwap", { direction: "fiat_to_btc" })}>
             <Feather name="plus-circle" size={22} color={c.primary} />
