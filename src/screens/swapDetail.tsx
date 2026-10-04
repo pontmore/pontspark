@@ -243,24 +243,27 @@ export function SwapDetailScreen() {
       footer={primary}
       onRefresh={() => void engine.refreshSwap(id)}
     >
-      {st.status === "settled" ? (
-        <SwapCelebration
-          play={celebrate}
-          fiatCode={root.terms.fiat.currency}
-          amountLabel={iReceiveBtc ? `+${view.satsLabel}` : `+${view.fiatLabel}`}
-          caption={
-            profit !== null
-              ? `You earned ≈ ${root.terms.fiat.currency} ${profit.toFixed(2)} on this swap`
-              : iReceiveBtc
-                ? `Paid ${view.fiatLabel} to ${them}`
-                : `Sold ${view.satsLabel} to ${them}`
-          }
-        />
-      ) : null}
       <View style={{ gap: space.md }}>
         <Badge label={view.title.toUpperCase()} tone="neutral" />
-        <Text variant="display">{checkingLock ? "Checking the lock" : view.headline}</Text>
-        <Text muted>{checkingLock ? `Making sure ${view.satsLabel} are locked for you before you pay.` : view.detail}</Text>
+        {st.status === "settled" ? (
+          <SwapCelebration
+            play={celebrate}
+            fiatCode={root.terms.fiat.currency}
+            amountLabel={iReceiveBtc ? `+${view.satsLabel}` : `+${view.fiatLabel}`}
+            caption={
+              profit !== null
+                ? `You earned ≈ ${root.terms.fiat.currency} ${profit.toFixed(2)} on this swap`
+                : iReceiveBtc
+                  ? `Paid ${view.fiatLabel} to ${them}`
+                  : `Sold ${view.satsLabel} to ${them}`
+            }
+          />
+        ) : (
+          <>
+            <Text variant="display">{checkingLock ? "Checking the lock" : view.headline}</Text>
+            <Text muted>{checkingLock ? `Making sure ${view.satsLabel} are locked for you before you pay.` : view.detail}</Text>
+          </>
+        )}
         {!["declined", "cancelled", "expired", "settled"].includes(st.status) && <Steps step={iReceiveBtc && st.status === "secured" && !lock?.ok ? Math.min(view.step, 1) : view.step} tone={view.tone === "danger" ? "danger" : "ok"} />}
         {deadline && now < deadline.at && !st.disputed && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
