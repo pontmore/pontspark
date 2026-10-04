@@ -18,7 +18,7 @@ import { fetchProfile } from "../services/discovery";
 import * as engine from "../services/swapEngine";
 import { chatOf, payloadFrom, unreadCount, useSwaps } from "../store/swaps";
 import { Avatar, Badge, Button, Card, Chip, Collapsible, Field, Header, Notice, Row, Screen, Section, Spinner, Text, success, toneColors } from "../ui/components";
-import { CopyField, Sheet, confirm, toast, toastError } from "../ui/extras";
+import { CopyField, Sheet, confirm, dismissConfirm, toast, toastError } from "../ui/extras";
 import { KeyValue, Steps } from "../ui/rows";
 import { radius, space, useColors } from "../ui/theme";
 
@@ -75,6 +75,8 @@ export function SwapDetailScreen() {
   useCounterpartyName(id, counterparty, item?.rec.local.counterpartyName);
 
   const status = item?.st.status;
+  // A question asked about the old state shouldn't be answerable in the new one.
+  useEffect(() => dismissConfirm(), [status]);
   const iReceiveBtc = item ? bitcoinProvider(item.st.root) !== me : false;
   useEffect(() => {
     if (!item || !iReceiveBtc || !["secured", "fiat_sent", "fiat_confirmed", "settlement_authorized"].includes(status ?? "")) return;
@@ -161,6 +163,7 @@ export function SwapDetailScreen() {
 
   const canCancel =
     !st.disputed && ((st.status === "proposed" && root.proposer === me && now < root.expiresAt) || (st.status === "accepted" && !rec.local.lockStartedAt && !payloadFrom(rec, bitcoinProvider(root), "locked")));
+  const checkingLock = iReceiveBtc && st.status === "secured" && !lock?.ok;
   const canDispute = !st.disputed && !view.done && st.status !== "proposed";
   // Only offer problems this side could actually have.
   const disputeReasons: DisputeClass[] = iReceiveFiat
@@ -181,10 +184,12 @@ export function SwapDetailScreen() {
     if (view.action === "pay")
       return (
         <Button
-          title="I've sent the money"
+          title={ch.fields.length ? "I've sent the money" : `I've handed over ${view.fiatLabel}`}
           icon="check"
+          loading={busy === "pay"}
           disabled={iReceiveBtc && !lock?.ok}
-          onPress={() => setRefOpen(true)}
+          // Cash has nothing to reference: one tap instead of a sheet.
+          onPress={() => (ch.fields.length ? setRefOpen(true) : void run("pay", () => engine.markFiatSent(id, ""), "Marked as paid"))}
         />
       );
     if (view.action === "confirm")
@@ -230,9 +235,9 @@ export function SwapDetailScreen() {
     >
       <View style={{ gap: space.md }}>
         <Badge label={view.title.toUpperCase()} tone="neutral" />
-        <Text variant="display">{view.headline}</Text>
-        <Text muted>{view.detail}</Text>
-        {!["declined", "cancelled", "expired"].includes(st.status) && <Steps step={iReceiveBtc && st.status === "secured" && !lock?.ok ? Math.min(view.step, 1) : view.step} tone={view.tone === "danger" ? "danger" : "ok"} />}
+        <Text variant="display">{checkingLock ? "Checking the lock" : view.headline}</Text>
+        <Text muted>{checkingLock ? `Making sure ${view.satsLabel} are locked for you before you pay.` : view.detail}</Text>
+        {!["declined", "cancelled", "expired", "settled"].includes(st.status) && <Steps step={iReceiveBtc && st.status === "secured" && !lock?.ok ? Math.min(view.step, 1) : view.step} tone={view.tone === "danger" ? "danger" : "ok"} />}
         {deadline && now < deadline.at && !st.disputed && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Feather name="clock" size={14} color={tone.fg} />
@@ -275,7 +280,7 @@ export function SwapDetailScreen() {
       )}
 
       {/* Payment instructions for whoever sends fiat */}
-      {iPayFiat && ["secured", "fiat_sent"].includes(st.status) && (
+      {iPayFiat && (st.status === "secured" || (st.status === "fiat_sent" && ch.fields.length > 0)) && (
         <Section title={ch.fields.length ? (st.status === "secured" ? "Send the money to" : "You sent the money to") : st.status === "secured" ? "Pay in cash" : "You paid in cash"}>
           {payTo ? (
             <Card>
@@ -284,7 +289,7 @@ export function SwapDetailScreen() {
               {describeDetails(payTo.channel, payTo.details).map((d) =>
                 d.copyValue ? <CopyField key={d.label} value={d.copyValue} display={d.value} label={d.label} /> : <KeyValue key={d.label} label={d.label} value={d.value} />,
               )}
-              {ch.payerInstructions.map((line) => (
+              {st.status === "secured" && ch.payerInstructions.map((line) => (
                 <Text key={line} variant="caption" muted>
                   {line}
                 </Text>
@@ -298,7 +303,7 @@ export function SwapDetailScreen() {
       )}
 
       {/* What the fiat receiver should look for */}
-      {iReceiveFiat && st.status === "fiat_sent" && !st.disputed && (
+      {iReceiveFiat && st.status === "fiat_sent" && !st.disputed && (theirRef || (payTo && describeDetails(payTo.channel, payTo.details).length > 0)) && (
         <Card tone="accent">
           <Text variant="label">Look for</Text>
           <KeyValue label="Amount" value={view.fiatLabel} />
@@ -366,7 +371,7 @@ export function SwapDetailScreen() {
             }}
           />
         )}
-        {canDispute && <Button small kind="danger" icon="flag" title="Report a problem" onPress={() => setDisputeOpen(true)} />}
+        {canDispute && <Button small kind="ghost" icon="flag" title="Report a problem" onPress={() => setDisputeOpen(true)} />}
       </View>
 
       <ReferenceSheet

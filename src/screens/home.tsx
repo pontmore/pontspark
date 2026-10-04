@@ -112,14 +112,14 @@ export function HomeScreen() {
 
       {mode === "user" && (
         <View style={{ flexDirection: "row", gap: space.md }}>
-          <Card style={{ flex: 1 }} onPress={() => nav.navigate("NewSwap", { direction: "fiat_to_btc" })}>
+          <Card style={{ flex: 1, flexBasis: 0, minWidth: 0 }} onPress={() => nav.navigate("NewSwap", { direction: "fiat_to_btc" })}>
             <Feather name="plus-circle" size={22} color={c.primary} />
             <Text variant="heading">Buy bitcoin</Text>
             <Text variant="caption" muted>
               Pay an agent with cash or mobile money
             </Text>
           </Card>
-          <Card style={{ flex: 1 }} onPress={() => nav.navigate("NewSwap", { direction: "btc_to_fiat" })}>
+          <Card style={{ flex: 1, flexBasis: 0, minWidth: 0 }} onPress={() => nav.navigate("NewSwap", { direction: "btc_to_fiat" })}>
             <Feather name="minus-circle" size={22} color={c.accent} />
             <Text variant="heading">Sell bitcoin</Text>
             <Text variant="caption" muted>

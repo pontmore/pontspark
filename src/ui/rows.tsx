@@ -114,7 +114,7 @@ export function TxRow({ tx, fiat, hidden }: { tx: WalletTx; fiat?: string | null
       iconBg={incoming ? c.primarySoft : c.surfaceAlt}
       iconColor={incoming ? c.primary : c.text}
       title={label}
-      subtitle={`${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}${tx.status === "pending" ? " · pending" : tx.status === "failed" ? " · failed" : ""}`}
+      subtitle={`${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}${tx.status === "pending" ? " · pending" : tx.status === "failed" ? " · failed" : ""}${!incoming && tx.feeSats > 0n ? ` · fee ${tx.feeSats} sats` : ""}`}
       right={
         <View style={{ alignItems: "flex-end" }}>
           <Text variant="label" color={incoming ? c.primary : c.text}>

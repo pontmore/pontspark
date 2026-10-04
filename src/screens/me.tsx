@@ -24,6 +24,7 @@ import { ClaimAddressSheet } from "./receive";
 import { setAgentOnline } from "../services/agentLoop";
 
 export function ActivityScreen() {
+  const nav = useNavigation<any>();
   const now = useNow(30000);
   const mode = useSession((s) => s.mode);
   const [tab, setTab] = useState<"active" | "past">("active");
@@ -41,7 +42,19 @@ export function ActivityScreen() {
         ]}
       />
       {shown.length === 0 ? (
-        <Empty icon="repeat" title={tab === "active" ? "No active swaps" : "No past swaps"} body="Swaps you start or take appear here." />
+        <Empty
+          icon="repeat"
+          title={tab === "active" ? "No active swaps" : "No past swaps"}
+          body={mode === "agent" ? "Requests you take appear here." : "Buy or sell bitcoin with an agent near you."}
+          action={
+            mode === "agent" ? undefined : (
+              <View style={{ flexDirection: "row", gap: space.sm }}>
+                <Button small title="Buy bitcoin" onPress={() => nav.navigate("NewSwap", { direction: "fiat_to_btc" })} />
+                <Button small kind="secondary" title="Sell bitcoin" onPress={() => nav.navigate("NewSwap", { direction: "btc_to_fiat" })} />
+              </View>
+            )
+          }
+        />
       ) : (
         <Card style={{ paddingVertical: space.sm, gap: 0 }}>
           {shown.map((i) => (
@@ -131,12 +144,6 @@ export function MeScreen() {
           <Row icon="key" title="Identity" subtitle="Your public key, derived from your recovery phrase" chevron onPress={() => nav.navigate("Identity")} />
           <Divider />
           <Row icon="radio" title="Relays" subtitle="Where offers, swaps and messages travel" chevron onPress={() => nav.navigate("Relays")} />
-          {mode === "agent" && (
-            <>
-              <Divider />
-              <Row icon="sliders" title="Agent setup" subtitle="Markets, pricing and payment details" chevron onPress={() => nav.navigate("AgentSetup")} />
-            </>
-          )}
         </Card>
       </Section>
 

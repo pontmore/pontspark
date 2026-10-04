@@ -167,6 +167,11 @@ export function confirm(opts: ConfirmOptions): Promise<boolean> {
   });
 }
 
+export function dismissConfirm() {
+  useConfirmStore.getState().current?.resolve(false);
+  useConfirmStore.setState({ current: null });
+}
+
 export function ConfirmHost() {
   const current = useConfirmStore((s) => s.current);
   const c = useColors();

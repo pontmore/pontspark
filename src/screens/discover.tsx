@@ -177,9 +177,9 @@ export function AgentProfileScreen() {
             {currencyInfo(o.currency).flag} {o.currency}
           </Text>
           {o.buy && <KeyValue label="Sells you bitcoin at" value={`${o.currency} ${formatDecimal(o.buy.price, 0)}/BTC`} />}
-          {o.buy && <KeyValue label="Buy limits" value={`${formatDecimal(o.buy.min)} – ${formatDecimal(o.buy.max)}`} />}
+          {o.buy && <KeyValue label="Buy limits" value={`${o.currency} ${formatDecimal(o.buy.min)} – ${formatDecimal(o.buy.max)}`} />}
           {o.sell && <KeyValue label="Buys your bitcoin at" value={`${o.currency} ${formatDecimal(o.sell.price, 0)}/BTC`} />}
-          {o.sell && <KeyValue label="Sell limits" value={`${formatDecimal(o.sell.min)} – ${formatDecimal(o.sell.max)}`} />}
+          {o.sell && <KeyValue label="Sell limits" value={`${o.currency} ${formatDecimal(o.sell.min)} – ${formatDecimal(o.sell.max)}`} />}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
             {o.channels.map((ch) => (
               <Badge key={ch} label={channelInfo(ch).label} />

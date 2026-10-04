@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { errorText } from "../lib/errors";
 import { useFiatOf } from "../hooks";
 import { formatSats } from "../lib/money";
 import { parseAgentLink } from "../lib/links";
@@ -50,7 +51,12 @@ export function SendScreen() {
       }
     } catch (e) {
       setParsed(null);
-      setError((e as Error).message);
+      const text = errorText(e);
+      setError(
+        text.startsWith("SdkError.InvalidInput") || text.includes("Unrecognized") || text.includes("parse")
+          ? "That isn't an invoice, Lightning address or bitcoin address."
+          : text,
+      );
     } finally {
       setBusy(false);
     }
@@ -68,7 +74,7 @@ export function SendScreen() {
     try {
       setPrepared(await wallet.prepareSend(parsed, BigInt(amount)));
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -84,7 +90,7 @@ export function SendScreen() {
       void useWallet.getState().refresh();
       nav.goBack();
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorText(e));
       setBusy(false);
     }
   };

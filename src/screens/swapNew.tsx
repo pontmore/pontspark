@@ -277,7 +277,7 @@ export function ReviewSwapScreen() {
         <View style={{ height: 1, backgroundColor: c.border }} />
         <KeyValue label="Agent" value={listing.profile.name ?? "Agent"} />
         <KeyValue label="Rate" value={`1 BTC = ${offer.currency} ${formatDecimal(q.price, 0)}`} />
-        <KeyValue label={buying ? "Pay with" : "Paid to"} value={ch.label} />
+        <KeyValue label={buying ? "Pay with" : "Receive as"} value={ch.label} />
       </Card>
 
       {!buying && ch.fields.length > 0 && (

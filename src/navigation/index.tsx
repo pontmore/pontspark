@@ -41,6 +41,7 @@ function Tabs() {
   return (
     <Tab.Navigator
       key={mode}
+      initialRouteName={mode === "agent" ? "Desk" : "Home"}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: c.text,
