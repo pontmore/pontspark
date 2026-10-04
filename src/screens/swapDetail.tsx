@@ -287,7 +287,8 @@ export function SwapDetailScreen() {
               <Row icon={ch.fields.length ? "smartphone" : "dollar-sign"} title={ch.label} subtitle={`Amount: ${view.fiatLabel}`} />
               {ch.fields.length > 0 && <CopyField value={root.terms.fiat.amount} label="Amount" />}
               {describeDetails(payTo.channel, payTo.details).map((d) =>
-                d.copyValue ? <CopyField key={d.label} value={d.copyValue} display={d.value} label={d.label} /> : <KeyValue key={d.label} label={d.label} value={d.value} />,
+                // The payer needs the real number to pay it; masking is for showing details to others.
+                d.copyValue ? <CopyField key={d.label} value={d.copyValue} label={d.label} /> : <KeyValue key={d.label} label={d.label} value={d.value} />,
               )}
               {st.status === "secured" && ch.payerInstructions.map((line) => (
                 <Text key={line} variant="caption" muted>

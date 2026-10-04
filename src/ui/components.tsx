@@ -162,17 +162,18 @@ export function Card({ children, style, onPress, tone }: { children: React.React
   const c = useColors();
   const bg =
     tone === "alt" ? c.surfaceAlt : tone === "primary" ? c.primarySoft : tone === "accent" ? c.accentSoft : tone === "danger" ? c.dangerSoft : tone === "warning" ? c.warningSoft : c.surface;
-  const inner = <View style={[styles.card, { backgroundColor: bg }, style]}>{children}</View>;
-  if (!onPress) return inner;
+  if (!onPress) return <View style={[styles.card, { backgroundColor: bg }, style]}>{children}</View>;
+  // The Pressable is what sits in the parent's layout, so flex sizing belongs on it.
+  const { flex, flexBasis, flexGrow, flexShrink, minWidth, maxWidth, width, alignSelf, ...rest } = StyleSheet.flatten(style) ?? {};
   return (
     <Pressable
       onPress={() => {
         tap();
         onPress();
       }}
-      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.99 : 1 }] })}
+      style={({ pressed }) => ({ flex, flexBasis, flexGrow, flexShrink, minWidth, maxWidth, width, alignSelf, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.99 : 1 }] })}
     >
-      {inner}
+      <View style={[styles.card, { backgroundColor: bg }, rest, flex !== undefined && { flex: 1 }]}>{children}</View>
     </Pressable>
   );
 }

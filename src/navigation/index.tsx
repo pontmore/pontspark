@@ -59,7 +59,7 @@ function Tabs() {
         </>
       ) : (
         <>
-          <Tab.Screen name="Home" component={HomeScreen} options={{ tabBarIcon: icon("home") }} />
+          <Tab.Screen name="Home" component={HomeScreen} options={{ tabBarLabel: "Wallet", tabBarIcon: icon("credit-card") }} />
           <Tab.Screen name="Agents" component={DiscoverScreen} options={{ tabBarIcon: icon("map-pin") }} />
           <Tab.Screen name="Swaps" component={ActivityScreen} options={{ tabBarIcon: icon("repeat"), ...badge }} />
           <Tab.Screen name="Me" component={MeScreen} options={{ tabBarIcon: icon("user") }} />
