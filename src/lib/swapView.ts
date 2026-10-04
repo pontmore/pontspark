@@ -52,7 +52,7 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
   const sats = formatSats(root.terms.bitcoin.amount);
   const channel = channelInfo(root.terms.payment_channel).short;
   const cash = channelInfo(root.terms.payment_channel).fields.length === 0;
-  const them = isAgent ? "the customer" : rec.local.counterpartyName || "the agent";
+  const them = rec.local.counterpartyName || (isAgent ? "the customer" : "the agent");
   const title = isAgent
     ? buying
       ? `Sell ${sats} for ${fiat}`
@@ -99,9 +99,13 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
     case "secured":
       if (iPayFiat) {
         if (now >= root.terms.deadlines.fiat_pay_by) return v("Payment window closed", "The locked bitcoin will return to its owner.", "warning");
-        return v(`Send ${fiat}`, `Pay ${them} via ${channel}, then tell us it's done.`, "accent", true, "pay");
+        return cash
+          ? v(`Hand over ${fiat}`, `Give ${them} ${fiat} in cash, then tell us it's done.`, "accent", true, "pay")
+          : v(`Send ${fiat}`, `Pay ${them} via ${channel}, then tell us it's done.`, "accent", true, "pay");
       }
-      return v(`Waiting for ${fiat}`, `${capital(them)} is sending you ${fiat} via ${channel}.`, "info");
+      return cash
+        ? v(`Waiting for ${fiat}`, `${capital(them)} will hand you ${fiat} in cash.`, "info")
+        : v(`Waiting for ${fiat}`, `${capital(them)} is sending you ${fiat} via ${channel}.`, "info");
     case "fiat_sent":
       if (iPayFiat) return v("Waiting for confirmation", `${capital(them)} is checking for your ${fiat}.`, "info");
       return cash

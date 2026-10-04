@@ -111,7 +111,8 @@ export function channelInfo(id: string): PaymentChannel {
     fields: schema.fields,
     referenceLabel: evidence?.label ?? "Reference",
     referenceRequired: evidence?.required ?? false,
-    payerInstructions: schema.instructions?.payer ?? [],
+    // The registry's cash copy ("keep local receipt evidence") reads like a form.
+    payerInstructions: schema.fields.length ? (schema.instructions?.payer ?? []) : ["Meet in person and hand over the exact amount. Agree where in the chat."],
     schema,
   };
 }

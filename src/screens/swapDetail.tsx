@@ -225,7 +225,7 @@ export function SwapDetailScreen() {
         <Badge label={view.title.toUpperCase()} tone="neutral" />
         <Text variant="display">{view.headline}</Text>
         <Text muted>{view.detail}</Text>
-        {!["declined", "cancelled", "expired"].includes(st.status) && <Steps step={view.step} tone={view.tone === "danger" ? "danger" : "ok"} />}
+        {!["declined", "cancelled", "expired"].includes(st.status) && <Steps step={iReceiveBtc && st.status === "secured" && !lock?.ok ? Math.min(view.step, 1) : view.step} tone={view.tone === "danger" ? "danger" : "ok"} />}
         {deadline && now < deadline.at && !st.disputed && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <Feather name="clock" size={14} color={tone.fg} />
@@ -282,7 +282,7 @@ export function SwapDetailScreen() {
                   {line}
                 </Text>
               ))}
-              {rec.local.referenceText && <KeyValue label={`Your ${ch.referenceLabel}`} value={rec.local.referenceText} />}
+              {rec.local.referenceText && <KeyValue label={`Your ${ch.referenceLabel.toLowerCase()}`} value={rec.local.referenceText} />}
             </Card>
           ) : (
             <Spinner label="Waiting for payment details…" />
@@ -409,14 +409,14 @@ export function SwapDetailScreen() {
 function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, busy }: { visible: boolean; cash: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string) => void; busy: boolean }) {
   const [ref, setRef] = useState("");
   return (
-    <Sheet visible={visible} onClose={onClose} title="Payment sent">
+    <Sheet visible={visible} onClose={onClose} title={cash ? "Cash handed over" : "Payment sent"}>
       <Text variant="caption" muted>
         {cash
           ? "Add a note if it helps the other side match your cash, like where you met. It's shared privately."
           : `Add the ${label.toLowerCase()} from your confirmation message so the other side can find your payment. It's shared privately.`}
       </Text>
-      <Field label={required ? label : `${label} (optional)`} value={ref} onChangeText={setRef} autoCapitalize="characters" autoCorrect={false} placeholder="e.g. QJK3XY8Z1P" />
-      <Button title="Confirm sent" disabled={required && ref.trim().length < 2} loading={busy} onPress={() => onSubmit(ref)} />
+      <Field label={required ? label : `${label} (optional)`} value={ref} onChangeText={setRef} autoCapitalize={cash ? "sentences" : "characters"} autoCorrect={false} placeholder={cash ? "e.g. at the shop on Moi Avenue" : "e.g. QJK3XY8Z1P"} />
+      <Button title={cash ? "Confirm" : "Confirm sent"} disabled={required && ref.trim().length < 2} loading={busy} onPress={() => onSubmit(ref)} />
     </Sheet>
   );
 }

@@ -211,7 +211,7 @@ export function Row({
         ) : null)}
       <View style={{ flex: 1, gap: 2 }}>
         {typeof title === "string" ? (
-          <Text variant="label" color={danger ? c.danger : undefined} numberOfLines={1}>
+          <Text variant="label" color={danger ? c.danger : undefined} numberOfLines={2}>
             {title}
           </Text>
         ) : (

@@ -277,7 +277,7 @@ export function ReviewSwapScreen() {
         <KeyValue label={buying ? "Pay with" : "Paid to"} value={ch.label} />
       </Card>
 
-      {!buying && (
+      {!buying && ch.fields.length > 0 && (
         <Card>
           <Text variant="heading">Where should {listing.profile.name ?? "the agent"} pay you?</Text>
           <Text variant="caption" muted>
@@ -297,7 +297,7 @@ export function ReviewSwapScreen() {
             ]
           : [
               ["lock", `Your ${formatSats(q.sats)} are locked, not sent. The agent can't take them yet.`],
-              ["send", `The agent sends ${fiat} to your ${ch.short}.`],
+              ["send", ch.fields.length ? `The agent sends ${fiat} to your ${ch.short}.` : `You meet the agent and collect ${fiat} in cash. Agree where in the chat.`],
               ["unlock", "You release the bitcoin only after you have the money. If it never arrives, the lock returns to you."],
             ]
         ).map(([icon, text]) => (

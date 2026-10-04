@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, KeyboardAvoidingView, Modal, Pressable, StyleSheet, View } from "react-native";
+import { Animated, Keyboard, KeyboardAvoidingView, Modal, Pressable, StyleSheet, View } from "react-native";
 import QRCode from "react-qr-code";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { create } from "zustand";
@@ -62,7 +62,14 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
     else y.setValue(400);
   }, [visible, y]);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      // The first BACK should only hide the keyboard, as it does everywhere else.
+      onRequestClose={() => (Keyboard.isVisible() ? Keyboard.dismiss() : onClose())}
+      statusBarTranslucent
+    >
       {/* A modal is its own window, so Android's adjustResize never reaches it: pad on both platforms. */}
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <Pressable style={[StyleSheet.absoluteFill, { backgroundColor: c.overlay }]} onPress={onClose} />

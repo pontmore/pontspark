@@ -156,11 +156,11 @@ function OfferPreview({ market }: { market: Market }) {
         {!ready.length ? <Badge label="Needs payment details" tone="warning" /> : !offer ? <Badge label="Not offered" tone="warning" /> : null}
       </View>
       {offer?.buy && (
-        <Row icon="arrow-up-right" title={`You sell at ${market.currency} ${formatDecimal(offer.buy.price, 0)} per BTC`} subtitle={`+${market.buy.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.buy.max)}`} />
+        <Row icon="arrow-up-right" title={`You sell at ${market.currency} ${formatDecimal(offer.buy.price, 0)} per BTC`} subtitle={`+${market.buy.spreadPct}% · ${market.currency} ${formatDecimal(offer.buy.min)}–${formatDecimal(offer.buy.max)}`} />
       )}
       {market.buy.enabled && rate && !built.buy && ready.length > 0 && <Notice tone="warning">Not enough bitcoin to sell. Top up your wallet.</Notice>}
       {offer?.sell && (
-        <Row icon="arrow-down-left" title={`You buy at ${market.currency} ${formatDecimal(offer.sell.price, 0)} per BTC`} subtitle={`−${market.sell.spreadPct}% · up to ${market.currency} ${formatDecimal(offer.sell.max)}`} />
+        <Row icon="arrow-down-left" title={`You buy at ${market.currency} ${formatDecimal(offer.sell.price, 0)} per BTC`} subtitle={`−${market.sell.spreadPct}% · ${market.currency} ${formatDecimal(offer.sell.min)}–${formatDecimal(offer.sell.max)}`} />
       )}
       <Text variant="caption" muted>
         {ready.map((c) => channelInfo(c).short).join(" · ") || "No channels ready"}
@@ -201,8 +201,8 @@ export function AgentSetupScreen() {
   return (
     <Screen back title="Agent setup" footer={<Button title="Save" disabled={!ready} onPress={save} />}>
       <Section title="Public profile">
-        <Field label="Display name" value={name} onChangeText={setName} placeholder="Wanjiku's Bitcoin Desk" maxLength={48} />
-        <Field label="About" value={about} onChangeText={setAbout} placeholder="Fast M-Pesa swaps in Nairobi, 7am–10pm" maxLength={160} multiline />
+        <Field label="Display name" value={name} onChangeText={setName} placeholder="e.g. Wanjiku's Bitcoin Desk" maxLength={48} />
+        <Field label="About" value={about} onChangeText={setAbout} placeholder="e.g. Fast M-Pesa swaps in Nairobi, 7am–10pm" maxLength={160} multiline />
       </Section>
       <Section title="Markets" action={<Button small kind="ghost" icon="plus" title="Add" onPress={() => setAdding(true)} />}>
         {draft.map((m) => {
@@ -304,6 +304,7 @@ function MarketSheet({ market, onClose, onSave, onRemove }: { market: Market; on
             <ChannelForm
               channel={channelEdit}
               initial={m.channels[channelEdit]}
+              onCancel={() => setChannelEdit(null)}
               onDone={(d) => {
                 const channels = { ...m.channels };
                 if (d) channels[channelEdit] = d;
@@ -377,7 +378,7 @@ function SideEditor({ title, hint, side, sign, rate, currency, onChange }: { tit
   );
 }
 
-function ChannelForm({ channel, initial, onDone }: { channel: string; initial?: ChannelDetails; onDone: (d: ChannelDetails | null) => void }) {
+function ChannelForm({ channel, initial, onDone, onCancel }: { channel: string; initial?: ChannelDetails; onDone: (d: ChannelDetails | null) => void; onCancel: () => void }) {
   const info = channelInfo(channel);
   const [d, setD] = useState<ChannelDetails>(initial ?? {});
   const check = validateDetails(channel, d);
@@ -389,6 +390,7 @@ function ChannelForm({ channel, initial, onDone }: { channel: string; initial?: 
       </Text>
       <ChannelFields channel={channel} value={d} onChange={setD} />
       <View style={{ flexDirection: "row", gap: space.sm }}>
+        <Button style={{ flex: 1 }} small kind="secondary" title="Cancel" onPress={onCancel} />
         {initial && <Button style={{ flex: 1 }} small kind="danger" title="Remove" onPress={() => onDone(null)} />}
         <Button style={{ flex: 1 }} small title={info.fields.length ? "Save channel" : "Offer cash"} disabled={!check.valid} onPress={() => onDone(check.data)} />
       </View>

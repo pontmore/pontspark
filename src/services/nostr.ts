@@ -28,15 +28,32 @@ export function sign(template: EventTemplate, sk: Uint8Array): Event {
   return finalizeEvent(template, sk);
 }
 
-/** Publish to all relays; resolves when at least one accepts. */
+/**
+ * Publish to all relays; resolves when at least one accepts. Relays that
+ * missed it get it again in the background, so e.g. withdrawn offers don't
+ * linger on one relay for half an hour.
+ */
 export async function publish(event: Event): Promise<Event> {
   if (!relays.length) throw new Error("No relays configured");
-  const results = await Promise.allSettled(p().publish(relays, event, { maxWait: 8000 }));
+  const targets = [...relays];
+  const results = await Promise.allSettled(p().publish(targets, event, { maxWait: 8000 }));
   if (!results.some((r) => r.status === "fulfilled")) {
     const reason = results.map((r) => (r.status === "rejected" ? String(r.reason) : "")).find(Boolean);
     throw new Error(`No relay accepted the event${reason ? `: ${reason}` : ""}`);
   }
+  const missed = targets.filter((_, i) => results[i].status === "rejected");
+  if (missed.length) retryPublish(event, missed, 1);
   return event;
+}
+
+const RETRY_DELAYS = [5_000, 30_000, 120_000];
+
+function retryPublish(event: Event, urls: string[], attempt: number) {
+  setTimeout(async () => {
+    const results = await Promise.allSettled(p().publish(urls, event, { maxWait: 8000 }));
+    const still = urls.filter((_, i) => results[i].status === "rejected");
+    if (still.length && attempt < RETRY_DELAYS.length) retryPublish(event, still, attempt + 1);
+  }, RETRY_DELAYS[attempt - 1]);
 }
 
 export async function publishAll(events: Event[]): Promise<void> {
