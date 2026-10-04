@@ -10,7 +10,7 @@ import { channelInfo, describeDetails } from "../lib/channels";
 import { formatDecimal, formatSats } from "../lib/money";
 import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
 import { npub } from "../lib/links";
-import { DISPUTE_CLASSES, type DisputeClass } from "../protocol/constants";
+import { type DisputeClass } from "../protocol/constants";
 import { parseOffer } from "../protocol/offer";
 import { parsePrivateTerms } from "../protocol/payloads";
 import { bitcoinProvider, fiatReceiver, fiatSender } from "../protocol/swap";
@@ -152,7 +152,7 @@ export function SwapDetailScreen() {
   // Say who the clock is for: "You pay within" vs "robotop pays within".
   const deadline =
     st.status === "proposed"
-      ? { label: `${them} replies within`, at: root.expiresAt }
+      ? { label: isAgent ? "Reply within" : `${them} replies within`, at: root.expiresAt }
       : st.status === "secured" || st.status === "accepted"
         ? { label: iPayFiat ? "Pay within" : `${them} pays within`, at: root.terms.deadlines.fiat_pay_by }
         : st.status === "fiat_sent"
@@ -162,12 +162,19 @@ export function SwapDetailScreen() {
   const canCancel =
     !st.disputed && ((st.status === "proposed" && root.proposer === me && now < root.expiresAt) || (st.status === "accepted" && !rec.local.lockStartedAt && !payloadFrom(rec, bitcoinProvider(root), "locked")));
   const canDispute = !st.disputed && !view.done && st.status !== "proposed";
+  // Only offer problems this side could actually have.
+  const disputeReasons: DisputeClass[] = iReceiveFiat
+    ? ["fiat_not_received", "incorrect_fiat_amount", ...(ch.fields.length ? (["payment_reference_invalid"] as const) : []), "conflicting_confirmation", "timeout"]
+    : ["escrow_not_secured", "bitcoin_not_released", "conflicting_confirmation", "timeout"];
 
   const primary = (() => {
     if (view.action === "accept")
       return (
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <Button style={{ flex: 1 }} kind="secondary" title="Decline" loading={busy === "decline"} onPress={() => run("decline", () => engine.declineSwap(id))} />
+          <Button style={{ flex: 1 }} kind="secondary" title="Decline" loading={busy === "decline"} onPress={async () => {
+              const ok = await confirm({ title: "Decline this request?", message: `${them} will see that you couldn't take it, and can ask another agent.`, confirmLabel: "Decline", cancelLabel: "Keep it", tone: "danger" });
+              if (ok) void run("decline", () => engine.declineSwap(id), "Declined");
+            }} />
           <Button style={{ flex: 2 }} title="Accept" loading={busy === "accept"} onPress={() => run("accept", () => engine.acceptSwap(id), "Accepted")} />
         </View>
       );
@@ -202,9 +209,9 @@ export function SwapDetailScreen() {
       );
     if (view.action === "resolve") return <ResolvePanel id={id} busy={busy} run={run} />;
     if (st.status === "proposed" && !isAgent && now >= root.expiresAt)
-      return <Button title="Try another agent" onPress={() => nav.replace("NewSwap", { direction: root.terms.direction, currency: root.terms.fiat.currency })} />;
+      return <Button title="Try another agent" onPress={() => nav.replace("NewSwap", { direction: root.terms.direction, currency: root.terms.fiat.currency, amount: root.terms.fiat.amount, avoidAgent: root.agent })} />;
     if (["declined", "expired"].includes(st.status) && !isAgent)
-      return <Button title="Try another agent" onPress={() => nav.replace("NewSwap", { direction: root.terms.direction, currency: root.terms.fiat.currency })} />;
+      return <Button title="Try another agent" onPress={() => nav.replace("NewSwap", { direction: root.terms.direction, currency: root.terms.fiat.currency, amount: root.terms.fiat.amount, avoidAgent: root.agent })} />;
     return null;
   })();
 
@@ -269,7 +276,7 @@ export function SwapDetailScreen() {
 
       {/* Payment instructions for whoever sends fiat */}
       {iPayFiat && ["secured", "fiat_sent"].includes(st.status) && (
-        <Section title={st.status === "secured" ? "Send the money to" : "You sent the money to"}>
+        <Section title={ch.fields.length ? (st.status === "secured" ? "Send the money to" : "You sent the money to") : st.status === "secured" ? "Pay in cash" : "You paid in cash"}>
           {payTo ? (
             <Card>
               <Row icon={ch.fields.length ? "smartphone" : "dollar-sign"} title={ch.label} subtitle={`Amount: ${view.fiatLabel}`} />
@@ -291,7 +298,7 @@ export function SwapDetailScreen() {
       )}
 
       {/* What the fiat receiver should look for */}
-      {iReceiveFiat && st.status === "fiat_sent" && (
+      {iReceiveFiat && st.status === "fiat_sent" && !st.disputed && (
         <Card tone="accent">
           <Text variant="label">Look for</Text>
           <KeyValue label="Amount" value={view.fiatLabel} />
@@ -320,14 +327,14 @@ export function SwapDetailScreen() {
       <Collapsible title="Public record">
         <Card>
           <Text variant="caption" muted>
-            Every step is a signed Nostr event (Pontmore PIP-02, pontmore/swap@1). Payment details and secrets never appear here.
+            Each step below is signed and published, so either side can prove what happened. Payment details never appear here.
           </Text>
-          <KeyValue label="Created" value={new Date(root.createdAt * 1000).toLocaleString()} />
+          <KeyValue label="Created" value={shortTime(root.createdAt)} />
           {st.chain.map((a) => (
             <KeyValue
               key={a.id}
               label={ACTION_LABELS[a.action] ?? a.action}
-              value={`${a.signer === root.escrow ? "escrow" : a.signer === root.resolver ? "resolver" : a.signer === me ? "you" : them} · ${new Date(a.createdAt * 1000).toLocaleTimeString()}`}
+              value={`${a.signer === root.escrow ? "escrow" : a.signer === root.resolver ? "resolver" : a.signer === me ? "you" : them} · ${new Date(a.createdAt * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`}
             />
           ))}
           {st.forked && <Notice tone="danger">Forked: {st.forkIds.length} competing actions.</Notice>}
@@ -383,22 +390,35 @@ export function SwapDetailScreen() {
 
       <Sheet visible={disputeOpen} onClose={() => setDisputeOpen(false)} title="What went wrong?">
         <Text variant="caption" muted>
-          Reporting pauses the swap. Locked bitcoin can't move while it's paused. Keep talking in chat to resolve it.
+          Reporting pauses the swap until it's settled or refunded. Locked bitcoin can't move meanwhile.
         </Text>
-        {DISPUTE_CLASSES.map((cls) => (
+        {disputeReasons.map((cls) => (
           <Row
             key={cls}
             title={DISPUTE_LABELS[cls]}
             chevron
-            onPress={() => {
+            onPress={async () => {
               setDisputeOpen(false);
-              void run("dispute", () => engine.openDispute(id, cls), "Swap paused");
+              const ok = await confirm({
+                title: "Pause this swap?",
+                message: `${them} will see "${DISPUTE_LABELS[cls]}". Keep talking in chat to sort it out.`,
+                confirmLabel: "Report problem",
+                cancelLabel: "Go back",
+                tone: "danger",
+                icon: "flag",
+              });
+              if (ok) void run("dispute", () => engine.openDispute(id, cls), "Swap paused");
             }}
           />
         ))}
       </Sheet>
     </Screen>
   );
+}
+
+function shortTime(ts: number) {
+  const d = new Date(ts * 1000);
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, busy }: { visible: boolean; cash: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string) => void; busy: boolean }) {
@@ -423,24 +443,26 @@ function ResolvePanel({ id, busy, run }: { id: string; busy: string | null; run:
       <Button title="Resolve dispute" icon="tool" loading={busy === "resolve"} onPress={() => setOpen(true)} />
       <Sheet visible={open} onClose={() => setOpen(false)} title="Resolve">
         <Text variant="caption" muted>
-          You're the bound resolver for your swaps. A resolution never moves funds by itself; locks still release or return by their own rules.
+          As the agent you decide how a paused swap ends. Settle sends the locked bitcoin to its buyer; refund returns it to its owner when the lock expires.
         </Text>
         {(
           [
-            ["resume", "Resume", "Continue where the swap left off", "play"],
-            ["authorize_settlement", "Settle", "The payment was made: release the bitcoin", "check-circle"],
-            ["authorize_refund", "Refund", "The payment wasn't made: return the bitcoin", "rotate-ccw"],
-            ["cancel", "Cancel", "Call the swap off", "x-circle"],
+            ["resume", "Resume", "Carry on where the swap left off", "play", false],
+            ["authorize_settlement", "Settle", "The money was paid: release the bitcoin", "check-circle", true],
+            ["authorize_refund", "Refund", "The money wasn't paid: return the bitcoin", "rotate-ccw", true],
+            ["cancel", "Cancel", "Call the swap off", "x-circle", true],
           ] as const
-        ).map(([effect, title, sub, icon]) => (
+        ).map(([effect, title, sub, icon, final]) => (
           <Row
             key={effect}
             icon={icon}
             title={title}
             subtitle={sub}
             chevron
-            onPress={() => {
+            onPress={async () => {
               setOpen(false);
+              if (final && !(await confirm({ title: `${title} this swap?`, message: `${sub}. This can't be undone.`, confirmLabel: title, cancelLabel: "Go back", tone: effect === "authorize_settlement" ? "primary" : "danger" })))
+                return;
               void run("resolve", () => engine.resolveDispute(id, effect), "Resolved");
             }}
           />
@@ -501,7 +523,7 @@ export function ChatScreen() {
             <View style={{ alignItems: "center", paddingBottom: space.lg, gap: space.sm }}>
               <Chip icon="lock" label="End-to-end encrypted" />
               <Text variant="caption" faint center style={{ maxWidth: 280 }}>
-                Messages are gift-wrapped Nostr DMs, readable only by you and {them}. Never share your recovery phrase.
+                Only you and {them} can read these messages. Never share your recovery phrase.
               </Text>
             </View>
           }

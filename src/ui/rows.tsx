@@ -138,7 +138,7 @@ export function KeyValue({ label, value, mono }: { label: string; value: React.R
         {label}
       </Text>
       {typeof value === "string" ? (
-        <Text variant="label" style={[{ flexShrink: 1, textAlign: "right" }, mono && { fontVariant: ["tabular-nums"] }]} selectable>
+        <Text variant="label" style={[{ flexShrink: 1, textAlign: "right" }, mono && { fontVariant: ["tabular-nums"] }]}>
           {value}
         </Text>
       ) : (

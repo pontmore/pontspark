@@ -28,7 +28,9 @@ export function NewSwapScreen() {
   const fixedAgent: string | undefined = route.params?.agentPk;
   const { load, loading, byCurrency, agents, loadAgent } = useDiscovery();
   const [currency, setCurrency] = useState<string>(route.params?.currency ?? sessionCurrency);
-  const [amount, setAmount] = useState("0");
+  const [amount, setAmount] = useState<string>(route.params?.amount ?? "0");
+  // After a decline, suggest someone else first (the same agent stays available last).
+  const avoid: string | undefined = route.params?.avoidAgent;
   const [picked, setPicked] = useState<Match | null>(null);
   const [channel, setChannel] = useState<string | null>(null);
   const [currencyOpen, setCurrencyOpen] = useState(false);
@@ -43,7 +45,8 @@ export function NewSwapScreen() {
   const listings = fixedAgent ? (agents[fixedAgent] ? [agents[fixedAgent]] : []) : (byCurrency[currency]?.listings ?? []);
   const fiatAmount = parseFiatInput(amount) ?? "0";
   const anyAmount = rankOffers(listings, currency, direction);
-  const fitting = rankOffers(listings, currency, direction, Number(fiatAmount) > 0 ? fiatAmount : undefined);
+  const ranked = rankOffers(listings, currency, direction, Number(fiatAmount) > 0 ? fiatAmount : undefined);
+  const fitting = avoid ? [...ranked.filter((m) => m.listing.pk !== avoid), ...ranked.filter((m) => m.listing.pk === avoid)] : ranked;
   const match = picked && fitting.some((m) => m.offer.event.id === picked.offer.event.id) ? picked : (fitting[0] ?? null);
   const side = match ? offerSide(match.offer, direction) : undefined;
   const q = match && Number(fiatAmount) > 0 ? quote(match.offer, direction, fiatAmount) : null;
@@ -292,7 +295,7 @@ export function ReviewSwapScreen() {
         {(buying
           ? [
               ["lock", `The agent locks ${formatSats(q.sats)} for you first. You'll see it in your wallet before you pay.`],
-              ["send", `Then you send ${fiat} via ${ch.short} within about ${Math.round(SWAP_TIMING.payWindow / 60)} minutes.`],
+              ["send", ch.fields.length ? `Then you send ${fiat} via ${ch.short} within about ${Math.round(SWAP_TIMING.payWindow / 60)} minutes.` : `Then you meet and pay ${fiat} in cash within about ${Math.round(SWAP_TIMING.payWindow / 60)} minutes.`],
               ["unlock", "When the agent confirms your payment, the bitcoin unlocks into your wallet."],
             ]
           : [

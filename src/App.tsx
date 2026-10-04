@@ -58,7 +58,7 @@ export default function App() {
   useBoot();
 
   useEffect(() => {
-    void SystemUI.setBackgroundColorAsync(c.bg);
+    SystemUI.setBackgroundColorAsync(c.bg).catch(() => undefined);
   }, [c.bg]);
 
   return (

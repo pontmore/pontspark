@@ -423,6 +423,7 @@ export function Toggle({ value, onChange, label, subtitle, icon }: { value: bool
       subtitle={subtitle}
       right={
         <Switch
+          accessibilityLabel={label}
           value={value}
           onValueChange={(v) => {
             tap();

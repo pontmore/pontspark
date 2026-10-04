@@ -76,9 +76,14 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
 
   if (st.forked) return v("Frozen", "Two conflicting updates were published. Funds stay locked until the lock expires.", "danger");
   if (st.disputed) {
+    const byMe = st.dispute?.by === me;
+    const why = DISPUTE_SUMMARY[st.dispute?.class ?? ""] ?? "something went wrong";
+    const who = byMe ? "You reported" : `${capital(them)} reported`;
     return v(
-      "In dispute",
-      isAgent ? "Review the conversation and resolve it." : "Progress is paused. Talk to the agent in chat.",
+      "Swap paused",
+      isAgent
+        ? `${who} that ${why}. Talk it through in chat, then settle or refund.`
+        : `${who} that ${why}. Talk it through in chat; ${them} settles or refunds once you agree.`,
       "danger",
       isAgent,
       isAgent ? "resolve" : null,
@@ -92,7 +97,9 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
         if (rec.local.problems?.length) return v("Can't take this one", rec.local.problems[0], "danger");
         return v("New request", `${fiat} via ${channel}. Accept to start.`, "accent", true, "accept");
       }
-      return v("Waiting for the agent", "Agents usually reply within a minute.", "info");
+      return now - root.createdAt < 90
+        ? v(`Waiting for ${them}`, "Agents usually reply within a minute.", "info")
+        : v(`Waiting for ${them}`, `${capital(them)} hasn't replied yet. You can cancel any time before they accept.`, "info");
     case "accepted":
       if (iPayFiat) return v("Locking bitcoin", `${capital(them)} is locking ${sats} for you.`, "info");
       return v("Locking your bitcoin", `Your ${sats} are being locked so ${them} can pay safely.`, "info");
@@ -121,13 +128,26 @@ export function describeSwap(rec: SwapRecord, st: SwapState, me: string, now = M
     case "refunded":
       return v("Refunded", "The bitcoin went back to its owner.", "neutral");
     case "declined":
-      return v("Declined", isAgent ? "You declined this request." : `${capital(them)} couldn't take this swap. Try another agent.`, "neutral");
-    case "cancelled":
-      return v("Cancelled", "This swap was cancelled.", "neutral");
+      return v("Declined", isAgent ? "You declined this request." : `${capital(them)} couldn't take this swap. Nothing was charged.`, "neutral");
+    case "cancelled": {
+      const by = [...st.chain].reverse().find((a) => a.action === "core/cancel")?.signer;
+      const who = by === me ? "You cancelled" : by ? `${capital(them)} cancelled` : "Cancelled";
+      return v("Cancelled", `${who} this swap. ${st.chain.some((a) => a.action === "core/secure") ? "Locked bitcoin goes back to its owner." : "Nothing was charged."}`, "neutral");
+    }
     case "expired":
       return v("Expired", "Nobody accepted this request in time.", "neutral");
   }
 }
+
+const DISPUTE_SUMMARY: Record<string, string> = {
+  fiat_not_received: "the money hasn't arrived",
+  incorrect_fiat_amount: "the wrong amount was paid",
+  payment_reference_invalid: "the payment reference is wrong",
+  escrow_not_secured: "the bitcoin was never locked",
+  bitcoin_not_released: "the bitcoin wasn't released",
+  conflicting_confirmation: "you disagree on what happened",
+  timeout: "the other side stopped responding",
+};
 
 /** "the agent" -> "The agent", but people's chosen names stay as they wrote them. */
 function capital(s: string) {

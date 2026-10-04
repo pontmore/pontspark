@@ -99,7 +99,9 @@ export const useSwaps = create<SwapsState>()(
       },
 
       markRead(rootId) {
-        get().patchLocal(rootId, { lastReadAt: Math.floor(Date.now() / 1000) });
+        // Message times come from the sender's clock, which may run ahead of ours.
+        const newest = Math.max(0, ...(get().records[rootId]?.inbox.map((i) => i.createdAt) ?? []));
+        get().patchLocal(rootId, { lastReadAt: Math.max(Math.floor(Date.now() / 1000), newest) });
       },
 
       clear: () => set({ records: {} }),
