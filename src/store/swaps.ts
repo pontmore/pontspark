@@ -42,6 +42,8 @@ export interface SwapRecord {
 
 interface SwapsState {
   records: Record<string, SwapRecord>;
+  paymentBindings: Record<string, { coordination: string; paymentId?: string }>;
+  bindPayment(rootId: string, hash: string, paymentId?: string): boolean;
   upsertRoot(root: Event, myPk: string): SwapRecord | null;
   addActions(rootId: string, events: Event[]): boolean;
   addInbox(item: InboxItem): boolean;
@@ -54,6 +56,25 @@ export const useSwaps = create<SwapsState>()(
   persist(
     (set, get) => ({
       records: {},
+      paymentBindings: {},
+
+      bindPayment(rootId, hash, paymentId) {
+        const s = get();
+        if (!s.records[rootId] || !/^[0-9a-f]{64}$/.test(hash)) return false;
+        const existing = s.paymentBindings[hash];
+        if (existing && (existing.coordination !== rootId ||
+            (existing.paymentId && paymentId && existing.paymentId !== paymentId))) return false;
+        if (Object.entries(s.paymentBindings).some(([h, b]) =>
+          (b.coordination === rootId && h !== hash) ||
+          (paymentId && b.paymentId === paymentId && b.coordination !== rootId))) return false;
+        // Old caches may already contain a secured lock without a binding.
+        if (Object.values(s.records).some((r) => r.id !== rootId &&
+            ((paymentId && r.local.lockTxId === paymentId) ||
+             (swapState(r).chain.some((a) => a.action === "core/secure") &&
+              r.inbox.some((i) => i.payload?.type === "locked" && i.payload.payment_hash === hash))))) return false;
+        set({ paymentBindings: { ...s.paymentBindings, [hash]: { coordination: rootId, paymentId: paymentId ?? existing?.paymentId } } });
+        return true;
+      },
 
       upsertRoot(root, myPk) {
         const existing = get().records[root.id];
@@ -106,13 +127,14 @@ export const useSwaps = create<SwapsState>()(
         get().patchLocal(rootId, { lastReadAt: Math.max(Math.floor(Date.now() / 1000), newest) });
       },
 
-      clear: () => set({ records: {} }),
+      clear: () => set({ records: {}, paymentBindings: {} }),
     }),
     {
       name: "pontmore.swaps",
       storage: createJSONStorage(() => ({
         ...encryptedSwapStorage,
-        // Zustand does not await background writes; retry on the next update.
+        // Zustand does not await background writes. Critical actions use the
+        // explicit checkpoint below and propagate any storage failure.
         setItem: async (name, value) => {
           try { await encryptedSwapStorage.setItem(name, value); } catch { /* Retry on the next update. */ }
         },
@@ -126,6 +148,7 @@ export const useSwaps = create<SwapsState>()(
 /** Providers derive their preimages; recipients retain them only until claiming. */
 function persistedSwaps(s: SwapsState) {
   return {
+    paymentBindings: s.paymentBindings,
     records: Object.fromEntries(Object.entries(s.records).map(([id, rec]) => [id, {
       ...rec,
       inbox: (rec.local.claimedAt || rec.local.releasedAt) ? rec.inbox.filter((i) => i.payload?.type !== "release") : rec.inbox,
@@ -141,6 +164,11 @@ export function hydrateSwaps(): Promise<void> {
     hydration = undefined;
     throw error;
   });
+}
+
+/** Money-related actions must wait until their binding is durable. */
+export async function persistPaymentBindings(): Promise<void> {
+  await encryptedSwapStorage.setItem("pontmore.swaps", JSON.stringify({ state: persistedSwaps(useSwaps.getState()), version: 0 }));
 }
 
 // -- derived ---------------------------------------------------------------
