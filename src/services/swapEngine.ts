@@ -44,7 +44,7 @@ import { channelInfo, detailsComplete, type ChannelDetails } from "../lib/channe
 import { commit, htlcPreimage, paymentHashOf, verifyCommitment, type KeyRing } from "../lib/keys";
 import { useAgent } from "../store/agent";
 import { useSession } from "../store/session";
-import { payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
+import { hydrateSwaps, payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
 import { useWallet } from "../store/wallet";
 import type { AgentListing } from "./discovery";
 import { publish, publishAll, query, resetPool, sign, subscribe } from "./nostr";
@@ -56,6 +56,7 @@ const WRAP_LOOKBACK = 4 * 24 * 60 * 60;
 const MIN_PAY_TIME = 5 * 60;
 
 let keys: KeyRing | null = null;
+let generation = 0;
 let stopFns: (() => void)[] = [];
 let actionSub: (() => void) | null = null;
 let actionSubKey = "";
@@ -73,8 +74,17 @@ function k(): KeyRing {
 export function startEngine(ring: KeyRing) {
   stopEngine();
   keys = ring;
-  const me = ring.identity.pk;
+  const started = generation;
+  void hydrateSwaps().then(() => {
+    if (keys !== ring || generation !== started) return;
+    beginEngine(ring);
+  }).catch((e: unknown) => {
+    if (__DEV__) console.warn("Swap cache unavailable:", errorText(e));
+  });
+}
 
+function beginEngine(ring: KeyRing) {
+  const me = ring.identity.pk;
   stopFns.push(
     subscribe([{ kinds: [KIND.root], "#p": [me] }], (e) => void ingestRoot(e)),
     subscribe([{ kinds: [KIND.giftWrap], "#p": [me], since: now() - WRAP_LOOKBACK }], (e) => void ingestWrap(e)),
@@ -101,6 +111,7 @@ export function resumeEngine() {
 }
 
 export function stopEngine() {
+  generation++;
   stopFns.forEach((f) => f());
   stopFns = [];
   actionSub?.();
@@ -132,7 +143,8 @@ function activeIds(): string[] {
 
 /** The customer may still need to claim after the agent recorded settlement. */
 function needsPostTerminalWork(rec: SwapRecord, st: SwapState): boolean {
-  return st.status === "settled" && rec.role === "customer" && st.root.terms.direction === "fiat_to_btc" && !rec.local.claimedAt;
+  return st.status === "settled" && rec.role === "customer" && st.root.terms.direction === "fiat_to_btc" &&
+    (!rec.local.claimedAt || !payloadFrom(rec, st.root.customer, "claimed"));
 }
 
 function refreshActionSubscription() {
@@ -383,6 +395,11 @@ async function duty(id: string): Promise<boolean> {
         }
         return false;
       }
+      if (rec.local.claimedAt) {
+        if (!sentByMe(rec, "claimed")) await send(id, { type: "claimed" });
+        await act(id, ring.escrow.sk, "core/settle");
+        return true;
+      }
       const release = payloadFrom(rec, root.customer, "release");
       if (!release || paymentHashOf(release.preimage) !== hash) return false;
       await claim(id, release.preimage, hash);
@@ -410,7 +427,12 @@ async function duty(id: string): Promise<boolean> {
     if (st.status === "accepted" && direction === "btc_to_fiat") return lockAndSecure(id);
     if (st.status === "accepted" && direction === "fiat_to_btc") return sendInvoice(id);
 
-    if ((st.status === "settlement_authorized" || st.status === "settled") && direction === "fiat_to_btc" && !rec.local.claimedAt) {
+    if ((st.status === "settlement_authorized" || st.status === "settled") && direction === "fiat_to_btc") {
+      if (rec.local.claimedAt) {
+        if (sentByMe(rec, "claimed")) return false;
+        await send(id, { type: "claimed" });
+        return true;
+      }
       const release = payloadFrom(rec, root.agent, "release");
       const hash = lockHash(rec, st);
       if (!release || !hash || paymentHashOf(release.preimage) !== hash) return false;
@@ -585,6 +607,7 @@ export interface NewSwap {
 }
 
 export async function createSwap(input: NewSwap): Promise<string> {
+  await hydrateSwaps();
   const ring = k();
   const t = now();
   const terms = termsFromOffer(input.offer, input.direction, input.fiatAmount, input.channel, {

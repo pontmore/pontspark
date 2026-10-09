@@ -3,13 +3,13 @@
  * The cache is an overlay; derived state always comes from replaying the
  * signed events (protocol/swap.ts).
  */
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Event } from "nostr-tools/pure";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { parseRoot, reconstruct, type SwapRoot, type SwapState } from "../protocol/swap";
 import type { InboxItem, PayloadBody, SwapPayload } from "../protocol/payloads";
+import { encryptedSwapStorage } from "../services/swapStorage";
 
 export type SwapRole = "agent" | "customer";
 
@@ -110,10 +110,38 @@ export const useSwaps = create<SwapsState>()(
     }),
     {
       name: "pontmore.swaps",
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => ({
+        ...encryptedSwapStorage,
+        // Zustand does not await background writes; retry on the next update.
+        setItem: async (name, value) => {
+          try { await encryptedSwapStorage.setItem(name, value); } catch { /* Retry on the next update. */ }
+        },
+      })),
+      skipHydration: true,
+      partialize: persistedSwaps,
     },
   ),
 );
+
+/** Providers derive their preimages; recipients retain them only until claiming. */
+function persistedSwaps(s: SwapsState) {
+  return {
+    records: Object.fromEntries(Object.entries(s.records).map(([id, rec]) => [id, {
+      ...rec,
+      inbox: (rec.local.claimedAt || rec.local.releasedAt) ? rec.inbox.filter((i) => i.payload?.type !== "release") : rec.inbox,
+    }])),
+  };
+}
+
+let hydration: Promise<void> | undefined;
+export function hydrateSwaps(): Promise<void> {
+  return hydration ??= Promise.resolve(useSwaps.persist.rehydrate()).then(() => {
+    if (!useSwaps.persist.hasHydrated()) throw new Error("Could not unlock the swap cache");
+  }).catch((error: unknown) => {
+    hydration = undefined;
+    throw error;
+  });
+}
 
 // -- derived ---------------------------------------------------------------
 
