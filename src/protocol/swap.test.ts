@@ -322,7 +322,7 @@ describe("keys and private payloads", () => {
     const a = key();
     const b = key();
     const root = "cd".repeat(32);
-    const [toB, toSelf] = wrapPayload(a.sk, a.pk, b.pk, root, [a.pk, b.pk], { type: "release", preimage: "00" });
+    const [toB, toSelf] = wrapPayload(a.sk, a.pk, b.pk, root, [a.pk, b.pk], { type: "release", preimage: "00".repeat(32) });
     const got = openWrap(toB, b.sk)!;
     expect(got.payload?.type).toBe("release");
     expect(got.from).toBe(a.pk);

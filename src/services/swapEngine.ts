@@ -44,7 +44,7 @@ import { channelInfo, detailsComplete, type ChannelDetails } from "../lib/channe
 import { commit, htlcPreimage, paymentHashOf, verifyCommitment, type KeyRing } from "../lib/keys";
 import { useAgent } from "../store/agent";
 import { useSession } from "../store/session";
-import { payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
+import { hydrateSwaps, persistPaymentBindings, payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
 import { useWallet } from "../store/wallet";
 import type { AgentListing } from "./discovery";
 import { publish, publishAll, query, resetPool, sign, subscribe } from "./nostr";
@@ -56,6 +56,7 @@ const WRAP_LOOKBACK = 4 * 24 * 60 * 60;
 const MIN_PAY_TIME = 5 * 60;
 
 let keys: KeyRing | null = null;
+let generation = 0;
 let stopFns: (() => void)[] = [];
 let actionSub: (() => void) | null = null;
 let actionSubKey = "";
@@ -73,8 +74,17 @@ function k(): KeyRing {
 export function startEngine(ring: KeyRing) {
   stopEngine();
   keys = ring;
-  const me = ring.identity.pk;
+  const started = generation;
+  void hydrateSwaps().then(() => {
+    if (keys !== ring || generation !== started) return;
+    beginEngine(ring);
+  }).catch((e: unknown) => {
+    if (__DEV__) console.warn("Swap cache unavailable:", errorText(e));
+  });
+}
 
+function beginEngine(ring: KeyRing) {
+  const me = ring.identity.pk;
   stopFns.push(
     subscribe([{ kinds: [KIND.root], "#p": [me] }], (e) => void ingestRoot(e)),
     subscribe([{ kinds: [KIND.giftWrap], "#p": [me], since: now() - WRAP_LOOKBACK }], (e) => void ingestWrap(e)),
@@ -101,6 +111,7 @@ export function resumeEngine() {
 }
 
 export function stopEngine() {
+  generation++;
   stopFns.forEach((f) => f());
   stopFns = [];
   actionSub?.();
@@ -132,7 +143,8 @@ function activeIds(): string[] {
 
 /** The customer may still need to claim after the agent recorded settlement. */
 function needsPostTerminalWork(rec: SwapRecord, st: SwapState): boolean {
-  return st.status === "settled" && rec.role === "customer" && st.root.terms.direction === "fiat_to_btc" && !rec.local.claimedAt;
+  return st.status === "settled" && rec.role === "customer" && st.root.terms.direction === "fiat_to_btc" &&
+    (!rec.local.claimedAt || !payloadFrom(rec, st.root.customer, "claimed"));
 }
 
 function refreshActionSubscription() {
@@ -189,6 +201,7 @@ async function ingestWrap(wrap: Event) {
   const st = swapState(rec);
   const parties = [st.root.agent, st.root.customer];
   if (!parties.includes(item.from) || !parties.includes(item.to)) return;
+  if (item.payload && !parties.every((p) => item.payload!.participants.includes(p))) return;
   if (useSwaps.getState().addInbox(item)) schedule(item.coordination);
 }
 
@@ -252,7 +265,8 @@ function htlcExpiry(st: SwapState): number {
 function lockHash(rec: SwapRecord, st: SwapState): string | undefined {
   const me = k().identity.pk;
   if (bitcoinProvider(st.root) === me) return paymentHashOf(htlcPreimage(k().identity.sk, rec.id));
-  return payloadFrom(rec, bitcoinProvider(st.root), "locked")?.payment_hash;
+  return Object.entries(useSwaps.getState().paymentBindings).find(([, b]) => b.coordination === rec.id)?.[0]
+    ?? announcedHash(rec, st); // Legacy caches acquire a binding when the lock is verified.
 }
 
 export interface LockCheck {
@@ -263,17 +277,24 @@ export interface LockCheck {
 
 /** Recipient-side check that the provider's HTLC really is in our wallet. */
 export async function verifyIncomingLock(id: string): Promise<LockCheck> {
+  await hydrateSwaps();
   const rec = record(id);
   const st = swapState(rec);
   const locked = payloadFrom(rec, bitcoinProvider(st.root), "locked");
   if (!locked) return { ok: false, reason: "Waiting for the bitcoin to be locked" };
-  const tx = await wallet.findHtlc(locked.payment_hash, "in");
+  const expected = announcedHash(rec, st);
+  if (!expected || locked.payment_hash !== expected) return { ok: false, reason: "Lock does not match the announced payment hash" };
+  if (!useSwaps.getState().bindPayment(id, expected)) return { ok: false, reason: "Payment hash is already bound to another swap" };
+  const tx = await wallet.findHtlc(expected, "in");
   if (!tx) return { ok: false, reason: "The lock hasn't reached your wallet yet" };
+  if (tx.htlc?.paymentHash !== expected) return { ok: false, reason: "Wallet payment hash does not match", tx };
   if (tx.amountSats < BigInt(st.root.terms.bitcoin.amount)) return { ok: false, reason: "Locked amount is too small", tx };
   if (tx.htlc?.status !== "waiting" && !(tx.htlc?.status === "released" && rec.local.claimedAt))
     return { ok: false, reason: "Lock is no longer claimable", tx };
   if ((tx.htlc?.expiresAt ?? 0) < st.root.terms.deadlines.fiat_confirm_by)
     return { ok: false, reason: "Lock expires before the swap deadline", tx };
+  if (!useSwaps.getState().bindPayment(id, expected, tx.id)) return { ok: false, reason: "Payment is already bound to another swap", tx };
+  await persistPaymentBindings();
   return { ok: true, tx };
 }
 
@@ -382,6 +403,11 @@ async function duty(id: string): Promise<boolean> {
         }
         return false;
       }
+      if (rec.local.claimedAt) {
+        if (!sentByMe(rec, "claimed")) await send(id, { type: "claimed" });
+        await act(id, ring.escrow.sk, "core/settle");
+        return true;
+      }
       const release = payloadFrom(rec, root.customer, "release");
       if (!release || paymentHashOf(release.preimage) !== hash) return false;
       await claim(id, release.preimage, hash);
@@ -409,7 +435,12 @@ async function duty(id: string): Promise<boolean> {
     if (st.status === "accepted" && direction === "btc_to_fiat") return lockAndSecure(id);
     if (st.status === "accepted" && direction === "fiat_to_btc") return sendInvoice(id);
 
-    if ((st.status === "settlement_authorized" || st.status === "settled") && direction === "fiat_to_btc" && !rec.local.claimedAt) {
+    if ((st.status === "settlement_authorized" || st.status === "settled") && direction === "fiat_to_btc") {
+      if (rec.local.claimedAt) {
+        if (sentByMe(rec, "claimed")) return false;
+        await send(id, { type: "claimed" });
+        return true;
+      }
       const release = payloadFrom(rec, root.agent, "release");
       const hash = lockHash(rec, st);
       if (!release || !hash || paymentHashOf(release.preimage) !== hash) return false;
@@ -427,6 +458,8 @@ async function duty(id: string): Promise<boolean> {
 }
 
 async function claim(id: string, preimage: string, hash: string) {
+  const check = await verifyIncomingLock(id);
+  if (!check.ok) throw new Error(check.reason ?? "Bitcoin lock could not be verified");
   const rec = record(id);
   if (!rec.local.claimedAt) {
     const existing = await wallet.findHtlc(hash, "in");
@@ -440,9 +473,11 @@ async function claim(id: string, preimage: string, hash: string) {
 /** The payment hash the bitcoin provider announced (accept or request payload). */
 function announcedHash(rec: SwapRecord, st: SwapState): string | undefined {
   const provider = bitcoinProvider(st.root);
-  return provider === st.root.agent
-    ? payloadFrom(rec, provider, "accept")?.payment_hash
-    : payloadFrom(rec, provider, "request")?.payment_hash;
+  const type = provider === st.root.agent ? "accept" : "request";
+  const hashes = rec.inbox.filter((i) => i.from === provider && i.payload?.type === type)
+    .map((i) => (i.payload as { payment_hash?: string }).payment_hash);
+  const hash = hashes[0];
+  return hash && /^[0-9a-f]{64}$/.test(hash) && hashes.every((h) => h === hash) ? hash : undefined;
 }
 
 function requestBody(rec: SwapRecord, quote: string, privateTerms: string): PayloadBody {
@@ -466,6 +501,8 @@ async function sendInvoice(id: string): Promise<boolean> {
   if (bitcoinProvider(st.root) === k().identity.pk || sentByMe(rec, "invoice")) return false;
   const hash = announcedHash(rec, st);
   if (!hash) return false;
+  if (!useSwaps.getState().bindPayment(id, hash)) throw new Error("Payment hash is already bound to another swap");
+  await persistPaymentBindings();
   const bolt11 = await wallet.holdInvoice({
     amountSats: BigInt(st.root.terms.bitcoin.amount),
     paymentHash: hash,
@@ -485,6 +522,8 @@ async function lockAndSecure(id: string): Promise<boolean> {
   const preimage = htlcPreimage(ring.identity.sk, id);
   const hash = paymentHashOf(preimage);
   const amount = BigInt(root.terms.bitcoin.amount);
+  if (!useSwaps.getState().bindPayment(id, hash)) throw new Error("Payment hash is already bound to another swap");
+  await persistPaymentBindings();
 
   if (!sentByMe(rec, "locked")) {
     let tx = await wallet.findHtlc(hash, "out");
@@ -499,11 +538,18 @@ async function lockAndSecure(id: string): Promise<boolean> {
       tx = await wallet.payHoldInvoice({ bolt11: invoice.bolt11, amountSats: amount, paymentHash: hash, idempotencySeed: `pontmore/lock/${id}` });
       void useWallet.getState().refresh();
     }
+    if (tx.htlc?.paymentHash !== hash || !useSwaps.getState().bindPayment(id, hash, tx.id)) throw new Error("Lock payment does not belong to this swap");
     useSwaps.getState().patchLocal(id, { lockTxId: tx.id });
+    await persistPaymentBindings();
     await send(id, { type: "locked", payment_hash: hash, expires_at: htlcExpiry(st), amount: amount.toString() });
     return true;
   }
   if (rec.role === "agent") {
+    const tx = await wallet.findHtlc(hash, "out");
+    if (!tx || tx.htlc?.paymentHash !== hash || tx.htlc.status !== "waiting" ||
+        tx.amountSats < amount || tx.htlc.expiresAt < root.terms.deadlines.fiat_confirm_by ||
+        !useSwaps.getState().bindPayment(id, hash, tx.id)) throw new Error("Bitcoin lock could not be verified");
+    await persistPaymentBindings();
     await act(id, ring.escrow.sk, "core/secure");
     return true;
   }
@@ -584,6 +630,7 @@ export interface NewSwap {
 }
 
 export async function createSwap(input: NewSwap): Promise<string> {
+  await hydrateSwaps();
   const ring = k();
   const t = now();
   const terms = termsFromOffer(input.offer, input.direction, input.fiatAmount, input.channel, {
@@ -657,6 +704,10 @@ export async function markFiatSent(id: string, reference: string) {
   const rec = record(id);
   const st = swapState(rec);
   if (fiatSender(st.root) !== k().identity.pk) throw new Error("Only the payer marks fiat as sent");
+  if (bitcoinProvider(st.root) !== k().identity.pk) {
+    const check = await verifyIncomingLock(id);
+    if (!check.ok) throw new Error(check.reason ?? "Bitcoin lock could not be verified");
+  }
   const bytes = paymentReferenceBytes(id, reference);
   await send(id, { type: "fiat_sent", reference: bytes });
   await act(id, k().identity.sk, "swap/fiat_sent", { payment_reference: commit(bytes) });

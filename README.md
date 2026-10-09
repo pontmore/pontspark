@@ -147,6 +147,10 @@ One 12-word phrase, generated on the device and stored in the keychain, backs ev
 
 Restoring the phrase restores funds, identity and agent authority. The app asks for a backup before the first buy and nudges before any receive. Passkeys and encrypted cloud backup are not in this version.
 
+The swap cache uses authenticated NIP-44 encryption with a separate random key held in SecureStore under the device-only accessibility policy. Existing plaintext caches are encrypted before hydration. A missing key or an invalid ciphertext blocks cache loading; the recovery phrase does not restore this device-local cache key. Released provider preimages and claimed recipient preimages are omitted from subsequent cache snapshots. Existing backups made before this change may still contain plaintext.
+
+Payment hashes and wallet payment IDs are reserved for one coordination in the local cache, including completed swaps. The engine waits for hydration and a durable binding before securing a received lock or marking fiat as paid. These reservations coordinate one app installation; they do not synchronize independent devices running the same wallet.
+
 ## Build it
 
 You need Node.js 20+, the Android SDK (or Xcode for iOS) and a [Breez API key](https://breez.technology/request-api-key/).
