@@ -189,6 +189,7 @@ async function ingestWrap(wrap: Event) {
   const st = swapState(rec);
   const parties = [st.root.agent, st.root.customer];
   if (!parties.includes(item.from) || !parties.includes(item.to)) return;
+  if (item.payload && !parties.every((p) => item.payload!.participants.includes(p))) return;
   if (useSwaps.getState().addInbox(item)) schedule(item.coordination);
 }
 

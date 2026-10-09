@@ -102,34 +102,57 @@ export function wrapChat(senderSk: Uint8Array, senderPk: string, recipientPk: st
   return [wrapEvent(rumor, senderSk, recipientPk), wrapEvent(rumor, senderSk, senderPk)];
 }
 
-const PAYLOAD_TYPES = new Set(["request", "accept", "invoice", "locked", "fiat_sent", "release", "claimed", "declined"]);
+const hex32 = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{64}$/.test(v);
+const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const string = (v: unknown): v is string => typeof v === "string";
+const optionalString = (v: unknown) => v === undefined || string(v);
+const optionalHash = (v: unknown) => v === undefined || hex32(v);
 
-/** Unwrap a gift wrap addressed to `sk`, or null if it is not ours or not a swap message. */
+function paymentDetails(v: unknown): boolean {
+  return object(v) && string(v.channel) && object(v.details) && Object.values(v.details).every(string);
+}
+
+function validPayload(v: unknown, root: string, from: string, to: string): v is SwapPayload {
+  if (!object(v) || v.v !== 1 || v.profile !== SWAP_PROFILE || v.coordination !== root ||
+      v.commitment_scheme !== "sha256-bytes@1" || !Array.isArray(v.participants) ||
+      v.participants.length !== 2 || !v.participants.every(hex32) ||
+      new Set(v.participants).size !== 2 || !v.participants.includes(from) || !v.participants.includes(to)) return false;
+  switch (v.type) {
+    case "request": return string(v.quote) && string(v.private_terms) && optionalHash(v.payment_hash) && optionalString(v.name) && parsePrivateTerms(v.private_terms) !== null;
+    case "accept": return (v.payment === undefined || paymentDetails(v.payment)) && optionalString(v.spark_address) && optionalHash(v.payment_hash);
+    case "invoice": return string(v.bolt11) && v.bolt11.length > 0;
+    case "locked": return hex32(v.payment_hash) && Number.isSafeInteger(v.expires_at) && (v.expires_at as number) > 0 && string(v.amount) && /^[1-9][0-9]*$/.test(v.amount);
+    case "fiat_sent": return string(v.reference);
+    case "release": return hex32(v.preimage);
+    case "claimed": return true;
+    case "declined": return Array.isArray(v.reasons) && v.reasons.every(string);
+    default: return false;
+  }
+}
+
+/** Untrusted decrypted data is validated inside the same boundary as decryption. */
 export function openWrap(wrap: Event, sk: Uint8Array): InboxItem | null {
-  let rumor;
   try {
-    rumor = unwrapEvent(wrap, sk);
+    const rumor = unwrapEvent(wrap, sk);
+    if (!object(rumor) || !hex32(rumor.id) || !hex32(rumor.pubkey) ||
+        !Number.isSafeInteger(rumor.created_at) || rumor.created_at < 0 ||
+        !string(rumor.content) || !Array.isArray(rumor.tags) ||
+        !rumor.tags.every((t) => Array.isArray(t) && t.length > 0 && t.every(string))) return null;
+    const roots = rumor.tags.filter((t) => t[0] === "e");
+    const recipients = rumor.tags.filter((t) => t[0] === "p");
+    if (roots.length !== 1 || recipients.length !== 1) return null;
+    const root = roots[0][1];
+    const to = recipients[0][1];
+    if (!hex32(root) || !hex32(to)) return null;
+    const base = { id: rumor.id, from: rumor.pubkey, to, createdAt: rumor.created_at, coordination: root };
+    if (rumor.kind === KIND.chat) return { ...base, kind: "chat", text: rumor.content.slice(0, 4000) };
+    if (rumor.kind !== KIND.swapPayload) return null;
+    const payload: unknown = JSON.parse(rumor.content);
+    if (!validPayload(payload, root, rumor.pubkey, to)) return null;
+    return { ...base, kind: "payload", payload };
   } catch {
     return null;
   }
-  const root = rumor.tags.find((t) => t[0] === "e")?.[1];
-  const to = rumor.tags.find((t) => t[0] === "p")?.[1];
-  if (!root || !to || !/^[0-9a-f]{64}$/.test(root)) return null;
-  const base = { id: rumor.id, from: rumor.pubkey, to, createdAt: rumor.created_at, coordination: root };
-
-  if (rumor.kind === KIND.chat) {
-    return { ...base, kind: "chat", text: String(rumor.content).slice(0, 4000) };
-  }
-  if (rumor.kind === KIND.swapPayload) {
-    try {
-      const p = JSON.parse(rumor.content) as SwapPayload;
-      if (p.v !== 1 || p.profile !== SWAP_PROFILE || p.coordination !== root || !PAYLOAD_TYPES.has(p.type)) return null;
-      return { ...base, kind: "payload", payload: p };
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 /** The payment reference bytes committed by swap/fiat_sent. */
@@ -139,8 +162,9 @@ export function paymentReferenceBytes(coordination: string, reference: string): 
 
 export function parsePrivateTerms(bytes: string): PrivateTerms | null {
   try {
-    const v = JSON.parse(bytes) as PrivateTerms;
-    return v && typeof v === "object" ? v : null;
+    const v: unknown = JSON.parse(bytes);
+    if (!object(v) || !optionalString(v.spark_address) || (v.payout !== undefined && !paymentDetails(v.payout))) return null;
+    return v as PrivateTerms;
   } catch {
     return null;
   }
