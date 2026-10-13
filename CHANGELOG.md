@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.2](https://github.com/pontmore/pontspark/compare/v0.2.1...v0.2.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* bind each HTLC payment to a single swap ([e958770](https://github.com/pontmore/pontspark/commit/e958770724f7dd3d9d556f7dcf841eab57fcf135))
+* encrypt private swap cache with a device-protected key ([6e35bec](https://github.com/pontmore/pontspark/commit/6e35bec62ad6c52a9029c72a12e5fd546c0e3956))
+* validate decrypted swap messages before ingestion ([6f90ee1](https://github.com/pontmore/pontspark/commit/6f90ee1d34c546d979453897ea392c2f4c827184))
+
 ## [0.2.1](https://github.com/pontmore/pontspark/compare/v0.2.0...v0.2.1) (2026-10-04)
 
 
