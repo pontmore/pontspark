@@ -64,6 +64,7 @@ function announce(id: string, paymentHash = hash) {
 }
 
 beforeEach(async () => {
+  jest.clearAllMocks();
   await hydrateSwaps();
   useSwaps.getState().clear();
   jest.mocked(wallet.findHtlc).mockResolvedValue({ id: "single-payment", amountSats: 1000n,
@@ -248,5 +249,51 @@ it("still claims a released preimage while the swap is disputed", async () => {
   expect(rec.local.claimedAt).toBeDefined();
   // The chain stays frozen: claiming is a wallet step, not a protocol action.
   expect(swapState(rec).disputed).toBe(true);
+});
+
+describe("recording a refund", () => {
+  function refundAuthorized() {
+    const root = finalizeEvent(rootTemplate({
+      agent, customer, escrow, resolver, descriptorId: "bb".repeat(32),
+      createdAt: 100 + serial++, expiresAt: 700,
+      terms: { direction: "fiat_to_btc", fiat: { currency: "KES", amount: "100" },
+        bitcoin: { unit: "sat", network: "spark", amount: "1000" }, payment_channel: "cash_ke_kes@2",
+        deadlines: { fiat_pay_by: 4500, fiat_confirm_by: 10800 } },
+    }), customerSk);
+    useSwaps.getState().upsertRoot(root, agent);
+    const accept = finalizeEvent(actionTemplate(root.id, root.id, "core/accept", undefined, [], 500), agentSk);
+    const secure = finalizeEvent(actionTemplate(root.id, accept.id, "core/secure", undefined, [], 600), escrowSk);
+    const refund = finalizeEvent(actionTemplate(root.id, secure.id, "core/authorize_refund", undefined, [], 5000), agentSk);
+    useSwaps.getState().addActions(root.id, [accept, secure, refund]);
+    return { id: root.id, lockHash: paymentHashOf(htlcPreimage(agentSk, root.id)) };
+  }
+
+  it("never records a refund for a lock that was released", async () => {
+    const { id, lockHash } = refundAuthorized();
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue({ id: "out", amountSats: 1000n,
+      htlc: { paymentHash: lockHash, status: "released", expiresAt: 14400 } } as wallet.WalletTx);
+    await runEngine(agentRing);
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("refund_authorized");
+    expect(nostr.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not record a refund past expiry once a claim was reported", async () => {
+    const { id } = refundAuthorized();
+    message(id, { type: "claimed" });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue(null);
+    await runEngine(agentRing);
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("refund_authorized");
+  });
+
+  it("records the refund once the lock has returned", async () => {
+    const { id, lockHash } = refundAuthorized();
+    jest.spyOn(Date, "now").mockReturnValue(6000_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue({ id: "out", amountSats: 1000n,
+      htlc: { paymentHash: lockHash, status: "returned", expiresAt: 14400 } } as wallet.WalletTx);
+    await runEngine(agentRing);
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("refunded");
+  });
 });
 

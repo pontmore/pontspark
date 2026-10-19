@@ -421,14 +421,17 @@ async function duty(id: string): Promise<boolean> {
     }
 
     if (st.status === "refund_authorized") {
+      // Bitcoin that reached its recipient was not refunded, whatever was authorized.
       const hash = lockHash(rec, st);
       const tx = hash ? await wallet.findHtlc(hash, direction === "fiat_to_btc" ? "out" : "in") : null;
-      const expiry = tx?.htlc?.expiresAt ?? htlcExpiry(st);
-      if (tx?.htlc?.status === "returned" || t > expiry + 600) {
-        await act(id, ring.escrow.sk, "core/refund");
-        return true;
+      if (tx?.htlc?.status === "released") return false;
+      if (tx?.htlc?.status !== "returned") {
+        // Without a return in the wallet, a claim either side reported also rules a refund out.
+        if (rec.local.claimedAt || payloadFrom(rec, bitcoinRecipient(root), "claimed")) return false;
+        if (t <= (tx?.htlc?.expiresAt ?? htlcExpiry(st)) + 600) return false;
       }
-      return false;
+      await act(id, ring.escrow.sk, "core/refund");
+      return true;
     }
   }
 
