@@ -33,9 +33,10 @@ function Tabs() {
   const c = useColors();
   const mode = useSession((s) => s.mode);
   const pending = useActionCount();
-  const icon =
-    (name: React.ComponentProps<typeof Feather>["name"]) =>
-    ({ color }: { color: string }) => <Feather name={name} size={22} color={color} />;
+  const icon = (name: React.ComponentProps<typeof Feather>["name"]) => {
+    const TabIcon = ({ color }: { color: string }) => <Feather name={name} size={22} color={color} />;
+    return TabIcon;
+  };
   const badge = pending ? { tabBarBadge: pending, tabBarBadgeStyle: { backgroundColor: c.accent, color: "#1d1408", fontSize: 11 } } : {};
 
   return (

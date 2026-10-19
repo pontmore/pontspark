@@ -169,6 +169,7 @@ export function CelebrationHost() {
   const current = useMoment((s) => s.current);
   const c = useColors();
   const fade = useRef(new Animated.Value(0)).current;
+  const close = () => Animated.timing(fade, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => useMoment.setState({ current: null }));
   useEffect(() => {
     if (!current) return;
     fade.setValue(0);
@@ -176,7 +177,6 @@ export function CelebrationHost() {
     const t = setTimeout(() => close(), 2800);
     return () => clearTimeout(t);
   }, [current]);
-  const close = () => Animated.timing(fade, { toValue: 0, duration: 260, useNativeDriver: true }).start(() => useMoment.setState({ current: null }));
   if (!current) return null;
   return (
     <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={close}>
