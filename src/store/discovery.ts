@@ -4,6 +4,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { BREEZ_NETWORK } from "../services/config";
 import { discoverAgents, fetchAgent, type AgentListing } from "../services/discovery";
+import { useSession } from "./session";
 import { checkLimits, isOfferLive, offerSide, type Offer } from "../protocol/offer";
 import type { Direction } from "../protocol/swap";
 import type { ChannelDetails } from "../lib/channels";
@@ -30,7 +31,9 @@ export const useDiscovery = create<DiscoveryState>()((set, get) => ({
     if (!force && cached && Date.now() - cached.at < FRESH_MS) return cached.listings;
     set({ loading: true, error: null });
     try {
-      const listings = await discoverAgents(BREEZ_NETWORK, currency);
+      // Our own agent offer (from agent mode on this identity) isn't someone to swap with.
+      const me = useSession.getState().keys?.identity.pk;
+      const listings = (await discoverAgents(BREEZ_NETWORK, currency)).filter((l) => l.pk !== me);
       set((s) => ({
         byCurrency: { ...s.byCurrency, [currency]: { listings, at: Date.now() } },
         agents: { ...s.agents, ...Object.fromEntries(listings.map((l) => [l.pk, l])) },
