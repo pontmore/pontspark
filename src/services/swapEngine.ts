@@ -457,6 +457,21 @@ async function duty(id: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Everything either side signed about a swap, as JSON a resolver can check:
+ * the public root and actions, and the private messages, each signed by its
+ * author. Preimages are left out, since a released one could be misused.
+ */
+export function signedRecord(id: string): string {
+  const rec = record(id);
+  return JSON.stringify({
+    format: "pontmore/swap-record@1",
+    root: rec.root,
+    actions: rec.actions,
+    messages: rec.inbox.filter((i) => i.event && i.payload?.type !== "release").map((i) => i.event),
+  });
+}
+
 async function claim(id: string, preimage: string, hash: string) {
   const check = await verifyIncomingLock(id);
   if (!check.ok) throw new Error(check.reason ?? "Bitcoin lock could not be verified");

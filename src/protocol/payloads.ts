@@ -2,13 +2,16 @@
  * Private swap payloads and chat, carried in NIP-59 gift wraps.
  *
  * Payment instructions, Spark addresses, payment references and HTLC
- * preimages never appear in public events. Per swap@1, every private payload
+ * preimages never appear in public events. Unlike plain NIP-59 rumors, every
+ * rumor here is signed by its author, so either participant can later hand a
+ * transcript to a resolver who can check who wrote what; unsigned rumors are
+ * rejected. Per swap@1, every private payload
  * names the profile, the coordination root, its participants and the
  * commitment scheme. Each wrap is also sent to the author so history survives
  * a reinstall.
  */
 import { unwrapEvent, wrapEvent } from "nostr-tools/nip59";
-import type { Event } from "nostr-tools/pure";
+import { finalizeEvent, verifyEvent, type Event } from "nostr-tools/pure";
 
 import { KIND, SWAP_PROFILE } from "./constants";
 import type { ChannelDetails } from "../lib/channels";
@@ -58,6 +61,8 @@ export interface InboxItem {
   kind: "chat" | "payload";
   text?: string;
   payload?: SwapPayload;
+  /** The author-signed rumor, kept so it can be disclosed as evidence. */
+  event?: Event;
 }
 
 export function wrapPayload(
@@ -76,7 +81,7 @@ export function wrapPayload(
     commitment_scheme: "sha256-bytes@1",
     ...body,
   };
-  const rumor = {
+  const rumor = finalizeEvent({
     kind: KIND.swapPayload,
     content: JSON.stringify(payload),
     tags: [
@@ -84,12 +89,12 @@ export function wrapPayload(
       ["e", coordination, "", "root"],
     ],
     created_at: Math.floor(Date.now() / 1000),
-  };
+  }, senderSk);
   return [wrapEvent(rumor, senderSk, recipientPk), wrapEvent(rumor, senderSk, senderPk)];
 }
 
 export function wrapChat(senderSk: Uint8Array, senderPk: string, recipientPk: string, coordination: string, text: string): Event[] {
-  const rumor = {
+  const rumor = finalizeEvent({
     kind: KIND.chat,
     content: text,
     tags: [
@@ -98,7 +103,7 @@ export function wrapChat(senderSk: Uint8Array, senderPk: string, recipientPk: st
       ["subject", "Pontmore swap"],
     ],
     created_at: Math.floor(Date.now() / 1000),
-  };
+  }, senderSk);
   return [wrapEvent(rumor, senderSk, recipientPk), wrapEvent(rumor, senderSk, senderPk)];
 }
 
@@ -138,13 +143,17 @@ export function openWrap(wrap: Event, sk: Uint8Array): InboxItem | null {
         !Number.isSafeInteger(rumor.created_at) || rumor.created_at < 0 ||
         !string(rumor.content) || !Array.isArray(rumor.tags) ||
         !rumor.tags.every((t) => Array.isArray(t) && t.length > 0 && t.every(string))) return null;
+    // The seal proves the sender to us; the rumor's own signature proves it to anyone we show it to.
+    const signed = rumor as Event;
+    if (!string(signed.sig) || !verifyEvent(signed)) return null;
     const roots = rumor.tags.filter((t) => t[0] === "e");
     const recipients = rumor.tags.filter((t) => t[0] === "p");
     if (roots.length !== 1 || recipients.length !== 1) return null;
     const root = roots[0][1];
     const to = recipients[0][1];
     if (!hex32(root) || !hex32(to)) return null;
-    const base = { id: rumor.id, from: rumor.pubkey, to, createdAt: rumor.created_at, coordination: root };
+    const event: Event = { id: signed.id, pubkey: signed.pubkey, created_at: signed.created_at, kind: signed.kind, tags: signed.tags, content: signed.content, sig: signed.sig };
+    const base = { id: rumor.id, from: rumor.pubkey, to, createdAt: rumor.created_at, coordination: root, event };
     if (rumor.kind === KIND.chat) return { ...base, kind: "chat", text: rumor.content.slice(0, 4000) };
     if (rumor.kind !== KIND.swapPayload) return null;
     const payload: unknown = JSON.parse(rumor.content);

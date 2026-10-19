@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import React, { useEffect, useRef, useState } from "react";
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, View } from "react-native";
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, Share, TextInput, View } from "react-native";
 import type { Event } from "nostr-tools/pure";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -365,6 +365,22 @@ export function SwapDetailScreen() {
           {st.forked && <Notice tone="danger">Forked: {st.forkIds.length} competing actions.</Notice>}
           <CopyField value={root.id} label="Coordination id" short />
           <CopyField value={npub(counterparty!)} label={isAgent ? "Customer npub" : "Agent npub"} short />
+          <Button
+            small
+            kind="ghost"
+            icon="share"
+            title="Share signed record"
+            onPress={async () => {
+              const ok = await confirm({
+                title: "Share this swap's record?",
+                message: "It includes your chat and payment details, signed by whoever wrote them, so someone helping with a problem can check what happened.",
+                confirmLabel: "Share",
+                cancelLabel: "Go back",
+                icon: "share",
+              });
+              if (ok) void Share.share({ message: engine.signedRecord(id) });
+            }}
+          />
         </Card>
       </Collapsible>
 

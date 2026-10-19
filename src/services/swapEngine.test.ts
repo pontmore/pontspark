@@ -19,7 +19,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import { actionTemplate, rootTemplate } from "../protocol/events";
 import { SWAP_PROFILE } from "../protocol/constants";
 import { useSwaps, hydrateSwaps, persistPaymentBindings } from "../store/swaps";
-import { verifyIncomingLock } from "./swapEngine";
+import { signedRecord, verifyIncomingLock } from "./swapEngine";
 import * as wallet from "./wallet";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { encryptedSwapStorage } from "./swapStorage";
@@ -150,4 +150,17 @@ it("does not reuse a legacy secured payment whose cache predates bindings", asyn
   useSwaps.getState().addActions(legacy, [accept, secure]);
   const candidate = swap(); announce(candidate);
   expect((await verifyIncomingLock(candidate)).ok).toBe(false);
+});
+
+it("leaves preimages out of a shared signed record", () => {
+  const id = swap();
+  const signed = (type: string) => finalizeEvent({ kind: 7310, created_at: 100, tags: [], content: type }, customerSk);
+  for (const [n, body] of [[1, { type: "claimed" }], [2, { type: "release", preimage: "cc".repeat(32) }]] as const) {
+    useSwaps.getState().addInbox({ id: String(n), from: customer, to: agent, createdAt: 100, coordination: id, kind: "payload",
+      payload: { v: 1, profile: SWAP_PROFILE, coordination: id, participants: [agent, customer], commitment_scheme: "sha256-bytes@1", ...body } as SwapPayload,
+      event: signed(body.type) });
+  }
+  const record = JSON.parse(signedRecord(id)) as { messages: { content: string }[]; root: { id: string } };
+  expect(record.root.id).toBe(id);
+  expect(record.messages.map((m) => m.content)).toEqual(["claimed"]);
 });

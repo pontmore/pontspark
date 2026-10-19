@@ -1,6 +1,6 @@
-import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
-import { createSeal, createWrap } from "nostr-tools/nip59";
-import { openWrap, parsePrivateTerms, wrapPayload } from "./payloads";
+import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
+import { createRumor, createSeal, createWrap } from "nostr-tools/nip59";
+import { openWrap, parsePrivateTerms, wrapChat, wrapPayload } from "./payloads";
 import { KIND } from "./constants";
 
 const sender = generateSecretKey();
@@ -32,4 +32,22 @@ it("requires the commitment scheme and both participants", () => {
   const [wrap] = wrapPayload(sender, from, to, root, [from], { type: "claimed" });
   expect(openWrap(wrap, recipient)).toBeNull();
   expect(parsePrivateTerms('{"payout":{"channel":"x","details":null}}')).toBeNull();
+});
+
+it("signs rumors so the recipient can show them to a third party", () => {
+  const [toThem, toMe] = wrapChat(sender, from, to, root, "paid from 0712");
+  const item = openWrap(toThem, recipient);
+  expect(item?.event).toMatchObject({ pubkey: from, content: "paid from 0712" });
+  expect(verifyEvent(item!.event!)).toBe(true);
+  // Both copies carry the same signed rumor.
+  expect(openWrap(toMe, sender)?.event?.id).toBe(item!.event!.id);
+});
+
+it("rejects unsigned and tampered rumors", () => {
+  const unsigned = createRumor({ kind: KIND.chat, content: "hi", tags: [["p", to], ["e", root, "", "root"]] }, sender);
+  expect(openWrap(createWrap(createSeal(unsigned, sender, to), to), recipient)).toBeNull();
+  const signed = finalizeEvent({ kind: KIND.chat, created_at: 100, content: "hi", tags: [["p", to], ["e", root, "", "root"]] }, sender);
+  const tampered = { ...signed, content: "bye" };
+  expect(openWrap(createWrap(createSeal(tampered as never, sender, to), to), recipient)).toBeNull();
+  expect(openWrap(createWrap(createSeal(signed as never, sender, to), to), recipient)?.text).toBe("hi");
 });

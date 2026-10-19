@@ -103,7 +103,7 @@ The escrow is a [Spark HTLC](https://sdk-doc-spark.breez.technology/guide/htlcs.
 | Settle | Agent's escrow key signs `core/settle`. | Same. |
 | No payment | After `fiat_pay_by` the bitcoin provider signs `core/authorize_refund`. The lock returns on expiry and the escrow key signs `core/refund`. | Same, with the customer as provider. |
 
-The party that provides bitcoin is the party that receives fiat, in both directions, so release always sits with whoever must confirm the money arrived. That matches how P2P desks work: the seller releases. The trade-off is that a dishonest seller can withhold release. The fiat sender then loses the fiat while the seller only gets their own bitcoin back at expiry. Disputes (`core/open_dispute`) freeze the chain publicly. The agent's resolver key can resume, authorize settlement or refund, or cancel. A resolution never moves funds.
+The party that provides bitcoin is the party that receives fiat, in both directions, so release always sits with whoever must confirm the money arrived. That matches how P2P desks work: the seller releases. The trade-off is that a dishonest seller can withhold release. The fiat sender then loses the fiat while the seller only gets their own bitcoin back at expiry. Disputes (`core/open_dispute`) freeze the chain publicly. The agent's resolver key can resume, authorize settlement or refund, or cancel. A resolution never moves funds. Either side can share a swap's signed record (public chain plus private messages, preimages excluded) with whoever helps settle it.
 
 Preimages are derived (`HMAC(identity key, root id)`) and HTLC sends use a derived idempotency key, so a crash or reinstall never double-locks and can always release.
 
@@ -130,7 +130,7 @@ Adding a channel to the registry makes it available here on the next package bum
 | Roles, terms, deadlines, authorization table, dispute classes, `quote` and `private_terms` commitments | `pontmore/swap@1` |
 | Offers as NIP-69 orders (`38383`, `y=pontmore`), one per currency and direction, with exact `price`, `channels`, escrow and resolver tags; agents honour a quote only within 1% of their current price and publish a coarse liquidity cap | `pontmore/swap@1` Offers (draft, [pontmore/protocol#25](https://github.com/pontmore/protocol/issues/25)) |
 | `spark_htlc` escrow type; descriptor publisher is the bound `core/escrow` | Implementation assumption |
-| Private payloads as gift-wrapped rumor kind `7310`; chat as NIP-17 kind `14` with an `e` tag to the root | Implementation assumption |
+| Private payloads as gift-wrapped rumor kind `7310`; chat as kind `14` with an `e` tag to the root; both rumors signed by their author (unlike NIP-17) so transcripts can serve as evidence | Implementation assumption |
 | Agent resolver is a derived key of the agent (`core/resolver`) | Implementation assumption |
 | `payment_channel` ids, fields and validation from the payment-channels registry | Implementation assumption |
 
