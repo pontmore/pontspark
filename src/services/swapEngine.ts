@@ -334,6 +334,7 @@ async function duty(id: string): Promise<boolean> {
   const { root } = st;
   const t = now();
   if (st.forked || st.disputed) return false;
+  if (await escalateUnconfirmedPayment(id, ring)) return true;
 
   const iProvide = bitcoinProvider(root) === me;
   const direction = root.terms.direction;
@@ -455,6 +456,20 @@ async function duty(id: string): Promise<boolean> {
     return true;
   }
   return false;
+}
+
+/**
+ * The fiat sender's guardian: once fiat_confirm_by passes with the payment
+ * claimed sent but never confirmed, confirmation is no longer possible and the
+ * lock refunds the bitcoin provider when it expires. Open a dispute first so a
+ * paid swap is never quietly decided by the clock.
+ */
+export async function escalateUnconfirmedPayment(id: string, ring: KeyRing): Promise<boolean> {
+  const st = swapState(record(id));
+  if (st.status !== "fiat_sent" || st.disputed || fiatSender(st.root) !== ring.identity.pk) return false;
+  if (now() < st.root.terms.deadlines.fiat_confirm_by) return false;
+  await act(id, ring.identity.sk, "core/open_dispute", { class: "timeout" });
+  return true;
 }
 
 /**

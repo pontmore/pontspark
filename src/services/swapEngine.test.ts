@@ -10,7 +10,11 @@ jest.mock("./secure", () => ({
   getSecret: jest.fn(async () => "cc".repeat(32)), setSecret: jest.fn(async () => undefined),
 }));
 jest.mock("./wallet", () => ({ findHtlc: jest.fn() }));
-jest.mock("./nostr", () => ({}));
+jest.mock("./nostr", () => ({
+  query: jest.fn(async () => []),
+  publish: jest.fn(async (event) => event),
+  sign: jest.fn((template, sk) => require("nostr-tools/pure").finalizeEvent(template, sk)),
+}));
 jest.mock("../store/agent", () => ({}));
 jest.mock("../store/session", () => ({}));
 jest.mock("../store/wallet", () => ({}));
@@ -18,8 +22,9 @@ jest.mock("../store/wallet", () => ({}));
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { actionTemplate, rootTemplate } from "../protocol/events";
 import { SWAP_PROFILE } from "../protocol/constants";
-import { useSwaps, hydrateSwaps, persistPaymentBindings } from "../store/swaps";
-import { signedRecord, verifyIncomingLock } from "./swapEngine";
+import { useSwaps, hydrateSwaps, persistPaymentBindings, swapState } from "../store/swaps";
+import type { KeyRing } from "../lib/keys";
+import { escalateUnconfirmedPayment, signedRecord, verifyIncomingLock } from "./swapEngine";
 import * as wallet from "./wallet";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { encryptedSwapStorage } from "./swapStorage";
@@ -61,6 +66,8 @@ beforeEach(async () => {
   jest.mocked(wallet.findHtlc).mockResolvedValue({ id: "single-payment", amountSats: 1000n,
     htlc: { paymentHash: hash, status: "waiting", expiresAt: 14400 } } as wallet.WalletTx);
 });
+
+afterEach(() => jest.restoreAllMocks());
 
 it("allows only one swap to verify a shared HTLC concurrently and retains the binding after reload", async () => {
   const ids = [swap(), swap()];
@@ -163,4 +170,38 @@ it("leaves preimages out of a shared signed record", () => {
   const record = JSON.parse(signedRecord(id)) as { messages: { content: string }[]; root: { id: string } };
   expect(record.root.id).toBe(id);
   expect(record.messages.map((m) => m.content)).toEqual(["claimed"]);
+});
+
+const customerRing: KeyRing = { identity: { pk: customer, sk: customerSk }, escrow: { pk: escrow, sk: escrowSk }, resolver: { pk: agent, sk: agentSk } };
+const agentRing: KeyRing = { ...customerRing, identity: { pk: agent, sk: agentSk } };
+
+/** A fiat_to_btc swap the customer has marked paid. */
+function paidSwap() {
+  const root = finalizeEvent(rootTemplate({
+    agent, customer, escrow, resolver, descriptorId: "bb".repeat(32),
+    createdAt: 100 + serial++, expiresAt: 700,
+    terms: { direction: "fiat_to_btc", fiat: { currency: "KES", amount: "100" },
+      bitcoin: { unit: "sat", network: "spark", amount: "1000" }, payment_channel: "cash_ke_kes@2",
+      deadlines: { fiat_pay_by: 4500, fiat_confirm_by: 10800 } },
+  }), customerSk);
+  useSwaps.getState().upsertRoot(root, customer);
+  const accept = finalizeEvent(actionTemplate(root.id, root.id, "core/accept", undefined, [], 500), agentSk);
+  const secure = finalizeEvent(actionTemplate(root.id, accept.id, "core/secure", undefined, [], 600), escrowSk);
+  const sent = finalizeEvent(actionTemplate(root.id, secure.id, "swap/fiat_sent", { payment_reference: "ref-1" }, [], 700), customerSk);
+  useSwaps.getState().addActions(root.id, [accept, secure, sent]);
+  return root.id;
+}
+
+it("opens a timeout dispute for the fiat sender once confirmation can no longer happen", async () => {
+  const id = paidSwap();
+  jest.spyOn(Date, "now").mockReturnValue(10799_000);
+  expect(await escalateUnconfirmedPayment(id, customerRing)).toBe(false);
+  jest.spyOn(Date, "now").mockReturnValue(10800_000);
+  // Only the fiat sender is at risk, so only its app escalates.
+  expect(await escalateUnconfirmedPayment(id, agentRing)).toBe(false);
+  expect(await escalateUnconfirmedPayment(id, customerRing)).toBe(true);
+  const st = swapState(useSwaps.getState().records[id]);
+  expect(st.disputed).toBe(true);
+  expect(st.dispute).toMatchObject({ by: customer, class: "timeout", preStatus: "fiat_sent" });
+  expect(await escalateUnconfirmedPayment(id, customerRing)).toBe(false);
 });
