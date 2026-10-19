@@ -483,7 +483,7 @@ export async function claimHtlc(preimage: string): Promise<WalletTx> {
 }
 
 /** Find our side of an HTLC by payment hash, sent or received. */
-export async function findHtlc(paymentHash: string, direction: "in" | "out"): Promise<WalletTx | null> {
+export async function findHtlc(paymentHash: string, direction: "in" | "out", options?: { fullHistory?: boolean }): Promise<WalletTx | null> {
   const s = await connect();
   await s.syncWallet({}).catch(() => undefined);
   const { payments } = await s.listPayments({
@@ -494,7 +494,7 @@ export async function findHtlc(paymentHash: string, direction: "in" | "out"): Pr
     fromTimestamp: undefined,
     toTimestamp: undefined,
     offset: undefined,
-    limit: 200,
+    limit: options?.fullHistory ? undefined : 200,
     sortAscending: false,
   });
   const match = payments.map(withHtlc).find((t) => t.htlc?.paymentHash === paymentHash);

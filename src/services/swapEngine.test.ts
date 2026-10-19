@@ -9,7 +9,7 @@ jest.mock("@react-native-async-storage/async-storage", () => {
 jest.mock("./secure", () => ({
   getSecret: jest.fn(async () => "cc".repeat(32)), setSecret: jest.fn(async () => undefined),
 }));
-jest.mock("./wallet", () => ({ findHtlc: jest.fn(), claimHtlc: jest.fn(async () => undefined) }));
+jest.mock("./wallet", () => ({ findHtlc: jest.fn(), payHoldInvoice: jest.fn(), claimHtlc: jest.fn(async () => undefined) }));
 jest.mock("./nostr", () => ({
   query: jest.fn(async () => []),
   publish: jest.fn(async (event) => event),
@@ -26,7 +26,7 @@ import { actionTemplate, rootTemplate } from "../protocol/events";
 import { SWAP_PROFILE } from "../protocol/constants";
 import { useSwaps, hydrateSwaps, persistPaymentBindings, swapState } from "../store/swaps";
 import { htlcPreimage, paymentHashOf, type KeyRing } from "../lib/keys";
-import { escalateUnconfirmedPayment, onEngineChange, signedRecord, startEngine, stopEngine, verifyIncomingLock } from "./swapEngine";
+import { closeOverdueSwap, escalateUnconfirmedPayment, onEngineChange, signedRecord, startEngine, stopEngine, verifyIncomingLock } from "./swapEngine";
 import * as nostr from "./nostr";
 import * as wallet from "./wallet";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -249,6 +249,77 @@ it("still claims a released preimage while the swap is disputed", async () => {
   expect(rec.local.claimedAt).toBeDefined();
   // The chain stays frozen: claiming is a wallet step, not a protocol action.
   expect(swapState(rec).disputed).toBe(true);
+});
+
+describe("a lock that returned", () => {
+  /** A fiat_to_btc swap the agent accepted, with the customer's hold invoice in hand. */
+  function acceptedSwap() {
+    const root = finalizeEvent(rootTemplate({
+      agent, customer, escrow, resolver, descriptorId: "bb".repeat(32),
+      createdAt: 100 + serial++, expiresAt: 700,
+      terms: { direction: "fiat_to_btc", fiat: { currency: "KES", amount: "100" },
+        bitcoin: { unit: "sat", network: "spark", amount: "1000" }, payment_channel: "cash_ke_kes@2",
+        deadlines: { fiat_pay_by: 4500, fiat_confirm_by: 10800 } },
+    }), customerSk);
+    useSwaps.getState().upsertRoot(root, agent);
+    useSwaps.getState().addActions(root.id, [finalizeEvent(actionTemplate(root.id, root.id, "core/accept", undefined, [], 500), agentSk)]);
+    fromAgent(root.id, { type: "accept" });
+    message(root.id, { type: "invoice", bolt11: "lnbc1" });
+    return root.id;
+  }
+  function returned(paymentHash: string) {
+    return { id: "returned", timestamp: 1000, amountSats: 1000n,
+      htlc: { paymentHash, status: "returned", expiresAt: 14400 } } as wallet.WalletTx;
+  }
+
+  it("cancels instead of retrying a check that can never pass", async () => {
+    const id = acceptedSwap();
+    const lockHash = paymentHashOf(htlcPreimage(agentSk, id));
+    fromAgent(id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
+    jest.spyOn(Date, "now").mockReturnValue(1000_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue(returned(lockHash));
+    await runEngine(agentRing);
+    const rec = useSwaps.getState().records[id];
+    expect(swapState(rec).status).toBe("cancelled");
+    expect(rec.local.lastError).toBeUndefined();
+  });
+
+  it("never announces a lock whose payment failed", async () => {
+    const id = acceptedSwap();
+    jest.spyOn(Date, "now").mockReturnValue(1000_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue(null);
+    jest.mocked(wallet.payHoldInvoice).mockResolvedValue(returned(paymentHashOf(htlcPreimage(agentSk, id))));
+    await runEngine(agentRing);
+    const rec = useSwaps.getState().records[id];
+    expect(swapState(rec).status).toBe("cancelled");
+    expect(rec.inbox.some((i) => i.from === agent && i.payload?.type === "locked")).toBe(false);
+  });
+
+  it("closes an overdue swap once the agent's lock returned", async () => {
+    const id = acceptedSwap();
+    const lockHash = paymentHashOf(htlcPreimage(agentSk, id));
+    fromAgent(id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
+    useSwaps.getState().patchLocal(id, { lockStartedAt: 900 });
+    jest.mocked(wallet.findHtlc).mockResolvedValue(returned(lockHash));
+    jest.spyOn(Date, "now").mockReturnValue(4499_000);
+    expect(await closeOverdueSwap(id, agentRing)).toBe(false);
+    jest.spyOn(Date, "now").mockReturnValue(4500_000);
+    // Only the bitcoin provider closes, so the customer waits on the agent.
+    expect(await closeOverdueSwap(id, customerRing)).toBe(false);
+    expect(await closeOverdueSwap(id, agentRing)).toBe(true);
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("cancelled");
+  });
+
+  it("keeps an overdue swap open while its lock may still be held", async () => {
+    const id = acceptedSwap();
+    const lockHash = paymentHashOf(htlcPreimage(agentSk, id));
+    fromAgent(id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
+    jest.spyOn(Date, "now").mockReturnValue(4500_000);
+    jest.mocked(wallet.findHtlc).mockResolvedValue({ ...returned(lockHash), htlc: { paymentHash: lockHash, status: "waiting", expiresAt: 14400 } } as wallet.WalletTx);
+    expect(await closeOverdueSwap(id, agentRing)).toBe(false);
+    jest.mocked(wallet.findHtlc).mockResolvedValue(null);
+    expect(await closeOverdueSwap(id, agentRing)).toBe(false);
+  });
 });
 
 describe("recording a refund", () => {

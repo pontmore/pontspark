@@ -328,6 +328,34 @@ async function runDuties(id: string) {
   if (record(id).local.lastError) useSwaps.getState().patchLocal(id, { lastError: undefined });
 }
 
+/** Close overdue requests without declaring an in-flight or paid lock cancelled. */
+export async function closeOverdueSwap(id: string, ring: KeyRing = k()): Promise<boolean> {
+  const rec = record(id);
+  const st = swapState(rec);
+  const me = ring.identity.pk;
+  const t = now();
+  if (st.forked || st.disputed || ![st.root.agent, st.root.customer].includes(me)) return false;
+  // One automatic writer avoids both phones appending competing expiry actions.
+  if (st.status === "proposed" && t >= st.root.expiresAt && st.root.proposer === me) {
+    await act(id, ring.identity.sk, "core/expire");
+    return true;
+  }
+  if (st.status !== "accepted" || t < st.root.terms.deadlines.fiat_pay_by || bitcoinProvider(st.root) !== me) return false;
+
+  const announced = announcedHash(rec, st);
+  const bound = Object.entries(useSwaps.getState().paymentBindings).filter(([, binding]) => binding.coordination === id).map(([hash]) => hash);
+  if (bound.length > 1 || (announced && bound[0] && announced !== bound[0])) throw new Error("Can't verify this swap's payment hash before closing it");
+  const hash = announced ?? bound[0] ?? paymentHashOf(htlcPreimage(ring.identity.sk, id));
+  // A returned payment cannot become paid later; anything else keeps the swap open.
+  const tx = await wallet.findHtlc(hash, "out", { fullHistory: true });
+  if (tx && tx.htlc?.status !== "returned") return false;
+  const lockMayBeInFlight = rec.local.lockStartedAt || rec.local.lockTxId || rec.inbox.some((i) => i.from === me && i.payload?.type === "locked");
+  const newerAttempt = rec.local.lockStartedAt && tx && tx.timestamp < rec.local.lockStartedAt;
+  if (lockMayBeInFlight && (!tx || newerAttempt) && t <= htlcExpiry(st) + 600) return false;
+  await act(id, ring.identity.sk, "core/cancel");
+  return true;
+}
+
 /** Perform at most one duty. Returns true if something was done. */
 async function duty(id: string): Promise<boolean> {
   const ring = k();
@@ -338,6 +366,7 @@ async function duty(id: string): Promise<boolean> {
   const t = now();
   // A frozen chain stops new decisions, not a claim the provider already made possible.
   if (st.forked || st.disputed) return claimReleased(id, ring);
+  if (await closeOverdueSwap(id, ring)) return true;
   if (await escalateUnconfirmedPayment(id, ring)) return true;
 
   const iProvide = bitcoinProvider(root) === me;
@@ -600,6 +629,20 @@ async function sendInvoice(id: string): Promise<boolean> {
   return true;
 }
 
+/** How long a started lock gets to show up in the wallet before it's tried again. */
+const LOCK_SETTLE_SECS = 5 * 60;
+
+/**
+ * A returned lock can't be paid again under the same idempotency key, and the
+ * customer doesn't pay before the swap is secured: close the request rather than
+ * retry a lock that can never be verified.
+ */
+async function cancelReturnedLock(id: string, tx: wallet.WalletTx | null): Promise<boolean> {
+  if (tx?.htlc?.status !== "returned") return false;
+  await cancelSwap(id);
+  return true;
+}
+
 /** Bitcoin provider: pay the recipient's hold invoice (idempotently), announce it, and — for the agent — secure. */
 async function lockAndSecure(id: string): Promise<boolean> {
   const ring = k();
@@ -614,7 +657,10 @@ async function lockAndSecure(id: string): Promise<boolean> {
 
   if (!sentByMe(rec, "locked")) {
     let tx = await wallet.findHtlc(hash, "out");
-    if (!tx || tx.htlc?.status === "returned") {
+    // A lock we started may still be on its way: wait for it rather than pay twice.
+    const started = rec.local.lockStartedAt;
+    if (!tx && started && now() - started < LOCK_SETTLE_SECS) return false;
+    if (!tx) {
       if (now() > root.terms.deadlines.fiat_pay_by - MIN_PAY_TIME) {
         throw new Error("Too close to the payment deadline to lock bitcoin safely");
       }
@@ -622,9 +668,16 @@ async function lockAndSecure(id: string): Promise<boolean> {
       const invoice = payloadFrom(rec, recipient, "invoice");
       if (!invoice) return false;
       useSwaps.getState().patchLocal(id, { lockStartedAt: now() });
-      tx = await wallet.payHoldInvoice({ bolt11: invoice.bolt11, amountSats: amount, paymentHash: hash, idempotencySeed: `pontmore/lock/${id}` });
+      try {
+        tx = await wallet.payHoldInvoice({ bolt11: invoice.bolt11, amountSats: amount, paymentHash: hash, idempotencySeed: `pontmore/lock/${id}` });
+      } catch (e) {
+        // Refused outright, nothing left the wallet: the next try needn't wait.
+        if (!(await wallet.findHtlc(hash, "out").catch(() => null))) useSwaps.getState().patchLocal(id, { lockStartedAt: undefined });
+        throw e;
+      }
       void useWallet.getState().refresh();
     }
+    if (await cancelReturnedLock(id, tx)) return true;
     if (tx.htlc?.paymentHash !== hash || !useSwaps.getState().bindPayment(id, hash, tx.id)) throw new Error("Lock payment does not belong to this swap");
     useSwaps.getState().patchLocal(id, { lockTxId: tx.id });
     await persistPaymentBindings();
@@ -633,6 +686,7 @@ async function lockAndSecure(id: string): Promise<boolean> {
   }
   if (rec.role === "agent") {
     const tx = await wallet.findHtlc(hash, "out");
+    if (await cancelReturnedLock(id, tx)) return true;
     if (!tx || tx.htlc?.paymentHash !== hash || tx.htlc.status !== "waiting" ||
         tx.amountSats < amount || tx.htlc.expiresAt < root.terms.deadlines.fiat_confirm_by ||
         !useSwaps.getState().bindPayment(id, hash, tx.id)) throw new Error("Bitcoin lock could not be verified");
