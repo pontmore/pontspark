@@ -10,8 +10,16 @@ import { requireKeys, useSession } from "../store/session";
 import { useWallet } from "../store/wallet";
 
 const REFRESH_MS = 10 * 60 * 1000;
+/** Lets a burst of wallet updates settle into one republish. */
+const BALANCE_SETTLE_MS = 5 * 1000;
 const KEEP_AWAKE_TAG = "pontmore-agent";
 let timer: ReturnType<typeof setInterval> | null = null;
+let balanceTimer: ReturnType<typeof setTimeout> | null = null;
+let unwatchBalance: (() => void) | null = null;
+
+function republish() {
+  publishNow(false).catch((e: Error) => useAgent.getState().setPublished(useAgent.getState().lastPublishedAt, e.message));
+}
 
 async function publishNow(withIdentity: boolean): Promise<void> {
   const keys = requireKeys();
@@ -35,15 +43,23 @@ async function publishNow(withIdentity: boolean): Promise<void> {
 
 function startLoop() {
   stopLoop();
-  timer = setInterval(() => {
-    publishNow(false).catch((e: Error) => useAgent.getState().setPublished(useAgent.getState().lastPublishedAt, e.message));
-  }, REFRESH_MS);
+  timer = setInterval(republish, REFRESH_MS);
+  // Offer limits follow the balance; don't let customers see stale ones until the next refresh.
+  unwatchBalance = useWallet.subscribe((s, prev) => {
+    if (s.balance === prev.balance || prev.balance == null) return;
+    if (balanceTimer) clearTimeout(balanceTimer);
+    balanceTimer = setTimeout(() => { balanceTimer = null; republish(); }, BALANCE_SETTLE_MS);
+  });
   void activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => undefined);
 }
 
 function stopLoop() {
   if (timer) clearInterval(timer);
   timer = null;
+  if (balanceTimer) clearTimeout(balanceTimer);
+  balanceTimer = null;
+  unwatchBalance?.();
+  unwatchBalance = null;
   void deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => undefined);
 }
 
