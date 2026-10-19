@@ -1,6 +1,6 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure";
 import { createRumor, createSeal, createWrap } from "nostr-tools/nip59";
-import { openWrap, parsePrivateTerms, wrapChat, wrapPayload } from "./payloads";
+import { openWrap, parsePaymentReference, parsePrivateTerms, paymentReferenceBytes, wrapChat, wrapPayload } from "./payloads";
 import { KIND } from "./constants";
 
 const sender = generateSecretKey();
@@ -50,4 +50,10 @@ it("rejects unsigned and tampered rumors", () => {
   const tampered = { ...signed, content: "bye" };
   expect(openWrap(createWrap(createSeal(tampered as never, sender, to), to), recipient)).toBeNull();
   expect(openWrap(createWrap(createSeal(signed as never, sender, to), to), recipient)?.text).toBe("hi");
+});
+
+it("commits the declared paying account with the reference", () => {
+  expect(parsePaymentReference(paymentReferenceBytes(root, " QJK3 ", " 0712 345678 "))).toEqual({ reference: "QJK3", payer: "0712 345678" });
+  expect(parsePaymentReference(paymentReferenceBytes(root, "QJK3", "  "))).toEqual({ reference: "QJK3" });
+  expect(parsePaymentReference('{"reference":1}')).toBeNull();
 });

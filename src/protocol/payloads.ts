@@ -37,6 +37,7 @@ export type PayloadBody =
   /** From the bitcoin recipient: a hold invoice for the provider's payment hash. */
   | { type: "invoice"; bolt11: string }
   | { type: "locked"; payment_hash: string; expires_at: number; amount: string }
+  /** `reference`: the exact bytes committed by swap/fiat_sent (see paymentReferenceBytes). */
   | { type: "fiat_sent"; reference: string }
   | { type: "release"; preimage: string }
   | { type: "claimed" }
@@ -164,9 +165,24 @@ export function openWrap(wrap: Event, sk: Uint8Array): InboxItem | null {
   }
 }
 
-/** The payment reference bytes committed by swap/fiat_sent. */
-export function paymentReferenceBytes(coordination: string, reference: string): string {
-  return JSON.stringify({ coordination, reference: reference.trim() });
+/**
+ * The payment reference bytes committed by swap/fiat_sent. `payer` is the
+ * account the fiat sender says the money comes from; committing it lets the
+ * receiver match the sender and makes the claim binding evidence.
+ */
+export function paymentReferenceBytes(coordination: string, reference: string, payer?: string): string {
+  const from = payer?.trim();
+  return JSON.stringify({ coordination, reference: reference.trim(), ...(from ? { payer: from } : {}) });
+}
+
+export function parsePaymentReference(bytes: string): { reference: string; payer?: string } | null {
+  try {
+    const v: unknown = JSON.parse(bytes);
+    if (!object(v) || !string(v.reference) || !optionalString(v.payer)) return null;
+    return { reference: v.reference, ...(string(v.payer) && v.payer ? { payer: v.payer } : {}) };
+  } catch {
+    return null;
+  }
 }
 
 export function parsePrivateTerms(bytes: string): PrivateTerms | null {

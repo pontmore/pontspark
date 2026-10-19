@@ -13,7 +13,7 @@ import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
 import { npub } from "../lib/links";
 import { type DisputeClass } from "../protocol/constants";
 import { parseOffer } from "../protocol/offer";
-import { parsePrivateTerms } from "../protocol/payloads";
+import { parsePaymentReference, parsePrivateTerms } from "../protocol/payloads";
 import { bitcoinProvider, fiatReceiver, fiatSender } from "../protocol/swap";
 import { fetchProfile } from "../services/discovery";
 import * as engine from "../services/swapEngine";
@@ -142,15 +142,13 @@ export function SwapDetailScreen() {
     root.terms.direction === "fiat_to_btc"
       ? payloadFrom(rec, root.agent, "accept")?.payment
       : parsePrivateTerms(rec.local.privateTermsBytes ?? payloadFrom(rec, root.customer, "request")?.private_terms ?? "")?.payout;
-  const theirRef = (() => {
+  const sentRef = (() => {
     const p = payloadFrom(rec, fiatSender(root), "fiat_sent");
-    if (!p) return null;
-    try {
-      return (JSON.parse(p.reference) as { reference?: string }).reference ?? null;
-    } catch {
-      return null;
-    }
+    return p ? parsePaymentReference(p.reference) : null;
   })();
+  const theirRef = sentRef?.reference || null;
+  // Agent receiving fiat: has this customer paid from this account before?
+  const payerHistory = iReceiveFiat ? engine.payerHistoryFor(id) : null;
 
   // Say who the clock is for: "You pay within" vs "robotop pays within".
   const deadline =
@@ -328,8 +326,17 @@ export function SwapDetailScreen() {
           <Text variant="label">Look for</Text>
           <KeyValue label="Amount" value={view.fiatLabel} />
           {theirRef && <KeyValue label={ch.referenceLabel} value={theirRef} />}
+          {sentRef?.payer && <KeyValue label="From" value={sentRef.payer} />}
           {payTo && describeDetails(payTo.channel, payTo.details).map((d) => <KeyValue key={d.label} label={`Into ${d.label.toLowerCase()}`} value={d.value} />)}
         </Card>
+      )}
+
+      {payerHistory && st.status === "fiat_sent" && !st.disputed && (
+        <Notice tone={payerHistory.account ? "info" : "warning"} title={payerHistory.account ? "Known paying account" : "First payment from this account"}>
+          {payerHistory.account
+            ? `${them} has completed ${payerHistory.account.swaps} ${payerHistory.account.swaps === 1 ? "swap" : "swaps"} with you from ${payerHistory.payer}, since ${new Date(payerHistory.account.firstAt * 1000).toLocaleDateString()}.`
+            : `${them} hasn't paid you from ${payerHistory.payer} before${payerHistory.otherAccounts ? `, though they have from ${payerHistory.otherAccounts} other ${payerHistory.otherAccounts === 1 ? "account" : "accounts"}` : ""}. Check the money came from that account, not from someone else paying on their behalf.`}
+        </Notice>
       )}
 
       <Collapsible title="Details" summary={`${view.fiatLabel} · ${formatSats(root.terms.bitcoin.amount)} · ${ch.short}`}>
@@ -416,11 +423,11 @@ export function SwapDetailScreen() {
         label={ch.referenceLabel}
         required={ch.referenceRequired}
         onClose={() => setRefOpen(false)}
-        onSubmit={(r) =>
+        onSubmit={(r, payer) =>
           run(
             "pay",
             async () => {
-              await engine.markFiatSent(id, r);
+              await engine.markFiatSent(id, r, payer);
               setRefOpen(false);
             },
             "Marked as sent",
@@ -462,8 +469,9 @@ function shortTime(ts: number) {
   return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, busy }: { visible: boolean; cash: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string) => void; busy: boolean }) {
+function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, busy }: { visible: boolean; cash: boolean; label: string; required: boolean; onClose: () => void; onSubmit: (r: string, payer?: string) => void; busy: boolean }) {
   const [ref, setRef] = useState("");
+  const [payer, setPayer] = useState("");
   return (
     <Sheet visible={visible} onClose={onClose} title={cash ? "Cash handed over" : "Payment sent"}>
       <Text variant="caption" muted>
@@ -472,7 +480,10 @@ function ReferenceSheet({ visible, cash, label, required, onClose, onSubmit, bus
           : `Add the ${label.toLowerCase()} from your confirmation message so the other side can find your payment. It's shared privately.`}
       </Text>
       <Field label={required ? label : `${label} (optional)`} value={ref} onChangeText={setRef} autoCapitalize={cash ? "sentences" : "characters"} autoCorrect={false} placeholder={cash ? "e.g. at the shop on Moi Avenue" : "e.g. QJK3XY8Z1P"} />
-      <Button title={cash ? "Confirm" : "Confirm sent"} disabled={required && ref.trim().length < 2} loading={busy} onPress={() => onSubmit(ref)} />
+      {!cash && (
+        <Field label="Paid from (optional)" value={payer} onChangeText={setPayer} autoCorrect={false} autoCapitalize="none" placeholder="The number or account you paid from" />
+      )}
+      <Button title={cash ? "Confirm" : "Confirm sent"} disabled={required && ref.trim().length < 2} loading={busy} onPress={() => onSubmit(ref, cash ? undefined : payer)} />
     </Sheet>
   );
 }

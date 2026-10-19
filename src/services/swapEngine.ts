@@ -23,6 +23,7 @@ import { errorText } from "../lib/errors";
 import { priceWithSpread } from "../lib/money";
 import {
   openWrap,
+  parsePaymentReference,
   parsePrivateTerms,
   paymentReferenceBytes,
   wrapChat,
@@ -42,6 +43,7 @@ import {
 } from "../protocol/swap";
 import { channelInfo, detailsComplete, type ChannelDetails } from "../lib/channels";
 import { commit, htlcPreimage, paymentHashOf, verifyCommitment, type KeyRing } from "../lib/keys";
+import { payerKey, payerSignal, type PayerSignal } from "../lib/payerHistory";
 import { useAgent } from "../store/agent";
 import { useSession } from "../store/session";
 import { hydrateSwaps, persistPaymentBindings, payloadFrom, swapState, useSwaps, type SwapRecord } from "../store/swaps";
@@ -399,20 +401,20 @@ async function duty(id: string): Promise<boolean> {
         }
         const out = await wallet.findHtlc(hash, "out");
         if (out?.htlc?.status === "released" || payloadFrom(rec, root.customer, "claimed")) {
-          await act(id, ring.escrow.sk, "core/settle");
+          await settle(id, ring);
           return true;
         }
         return false;
       }
       if (rec.local.claimedAt) {
         if (!sentByMe(rec, "claimed")) await send(id, { type: "claimed" });
-        await act(id, ring.escrow.sk, "core/settle");
+        await settle(id, ring);
         return true;
       }
       const release = payloadFrom(rec, root.customer, "release");
       if (!release || paymentHashOf(release.preimage) !== hash) return false;
       await claim(id, release.preimage, hash);
-      await act(id, ring.escrow.sk, "core/settle");
+      await settle(id, ring);
       return true;
     }
 
@@ -470,6 +472,40 @@ export async function escalateUnconfirmedPayment(id: string, ring: KeyRing): Pro
   if (now() < st.root.terms.deadlines.fiat_confirm_by) return false;
   await act(id, ring.identity.sk, "core/open_dispute", { class: "timeout" });
   return true;
+}
+
+/** Agent's escrow key records settlement; a paid account joins the customer's payer history. */
+async function settle(id: string, ring: KeyRing) {
+  await act(id, ring.escrow.sk, "core/settle");
+  const rec = record(id);
+  const { root } = swapState(rec);
+  if (rec.role !== "agent" || rec.local.payerRecordedAt || fiatReceiver(root) !== ring.identity.pk) return;
+  const sent = payloadFrom(rec, fiatSender(root), "fiat_sent");
+  const payer = sent ? parsePaymentReference(sent.reference)?.payer : undefined;
+  if (!payer) return;
+  useSwaps.getState().recordPayer(payerKey(ring.identity.sk, root.customer, root.terms.payment_channel, payer), now());
+  useSwaps.getState().patchLocal(id, { payerRecordedAt: now() });
+}
+
+/** Agent receiving fiat: how familiar the customer's declared paying account is. */
+export function payerHistoryFor(id: string): PayerSignal | null {
+  const ring = keys;
+  const rec = useSwaps.getState().records[id];
+  if (!ring || !rec || rec.role !== "agent") return null;
+  const { root } = swapState(rec);
+  if (fiatReceiver(root) !== ring.identity.pk) return null;
+  const sent = payloadFrom(rec, fiatSender(root), "fiat_sent");
+  const payer = sent ? parsePaymentReference(sent.reference)?.payer : undefined;
+  if (!payer) return null;
+  const key = payerKey(ring.identity.sk, root.customer, root.terms.payment_channel, payer);
+  // This swap's own entry is history only once it is recorded, never while it is pending.
+  const history = { ...useSwaps.getState().payerHistory };
+  if (rec.local.payerRecordedAt && history[key]) {
+    const e = history[key];
+    if (e.swaps <= 1) delete history[key];
+    else history[key] = { ...e, swaps: e.swaps - 1 };
+  }
+  return payerSignal(history, key, root.customer, root.terms.payment_channel, payer);
 }
 
 /**
@@ -730,7 +766,7 @@ export async function expireSwap(id: string) {
   await act(id, k().identity.sk, "core/expire");
 }
 
-export async function markFiatSent(id: string, reference: string) {
+export async function markFiatSent(id: string, reference: string, payer?: string) {
   const rec = record(id);
   const st = swapState(rec);
   if (fiatSender(st.root) !== k().identity.pk) throw new Error("Only the payer marks fiat as sent");
@@ -738,7 +774,7 @@ export async function markFiatSent(id: string, reference: string) {
     const check = await verifyIncomingLock(id);
     if (!check.ok) throw new Error(check.reason ?? "Bitcoin lock could not be verified");
   }
-  const bytes = paymentReferenceBytes(id, reference);
+  const bytes = paymentReferenceBytes(id, reference, payer);
   await send(id, { type: "fiat_sent", reference: bytes });
   await act(id, k().identity.sk, "swap/fiat_sent", { payment_reference: commit(bytes) });
   useSwaps.getState().patchLocal(id, { referenceText: reference.trim() });

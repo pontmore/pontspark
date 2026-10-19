@@ -10,6 +10,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { parseRoot, reconstruct, type SwapRoot, type SwapState } from "../protocol/swap";
 import type { InboxItem, PayloadBody, SwapPayload } from "../protocol/payloads";
 import { encryptedSwapStorage } from "../services/swapStorage";
+import type { PayerHistoryEntry } from "../lib/payerHistory";
 
 export type SwapRole = "agent" | "customer";
 
@@ -28,6 +29,8 @@ export interface SwapLocal {
   lastError?: string;
   /** The completion animation already played for this swap. */
   celebratedAt?: number;
+  /** Agent: the customer's paying account was added to the payer history. */
+  payerRecordedAt?: number;
 }
 
 export interface SwapRecord {
@@ -43,6 +46,9 @@ export interface SwapRecord {
 interface SwapsState {
   records: Record<string, SwapRecord>;
   paymentBindings: Record<string, { coordination: string; paymentId?: string }>;
+  /** Agent: completed swaps per customer paying account, keyed by lib/payerHistory. */
+  payerHistory: Record<string, PayerHistoryEntry>;
+  recordPayer(key: string, at: number): void;
   bindPayment(rootId: string, hash: string, paymentId?: string): boolean;
   upsertRoot(root: Event, myPk: string): SwapRecord | null;
   addActions(rootId: string, events: Event[]): boolean;
@@ -57,6 +63,15 @@ export const useSwaps = create<SwapsState>()(
     (set, get) => ({
       records: {},
       paymentBindings: {},
+      payerHistory: {},
+
+      recordPayer(key, at) {
+        const prev = get().payerHistory[key];
+        const entry = prev
+          ? { swaps: prev.swaps + 1, firstAt: Math.min(prev.firstAt, at), lastAt: Math.max(prev.lastAt, at) }
+          : { swaps: 1, firstAt: at, lastAt: at };
+        set((s) => ({ payerHistory: { ...s.payerHistory, [key]: entry } }));
+      },
 
       bindPayment(rootId, hash, paymentId) {
         const s = get();
@@ -127,7 +142,7 @@ export const useSwaps = create<SwapsState>()(
         get().patchLocal(rootId, { lastReadAt: Math.max(Math.floor(Date.now() / 1000), newest) });
       },
 
-      clear: () => set({ records: {}, paymentBindings: {} }),
+      clear: () => set({ records: {}, paymentBindings: {}, payerHistory: {} }),
     }),
     {
       name: "pontmore.swaps",
@@ -149,6 +164,7 @@ export const useSwaps = create<SwapsState>()(
 function persistedSwaps(s: SwapsState) {
   return {
     paymentBindings: s.paymentBindings,
+    payerHistory: s.payerHistory,
     records: Object.fromEntries(Object.entries(s.records).map(([id, rec]) => [id, {
       ...rec,
       inbox: (rec.local.claimedAt || rec.local.releasedAt) ? rec.inbox.filter((i) => i.payload?.type !== "release") : rec.inbox,

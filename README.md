@@ -131,6 +131,7 @@ Adding a channel to the registry makes it available here on the next package bum
 | Offers as NIP-69 orders (`38383`, `y=pontmore`), one per currency and direction, with exact `price`, `channels`, escrow and resolver tags; agents honour a quote only within 1% of their current price and publish a coarse liquidity cap | `pontmore/swap@1` Offers (draft, [pontmore/protocol#25](https://github.com/pontmore/protocol/issues/25)) |
 | `spark_htlc` escrow type; descriptor publisher is the bound `core/escrow` | Implementation assumption |
 | Private payloads as gift-wrapped rumor kind `7310`; chat as kind `14` with an `e` tag to the root; both rumors signed by their author (unlike NIP-17) so transcripts can serve as evidence | Implementation assumption |
+| Optional paying account committed with the payment reference; agents keep a private, hashed history of the accounts each customer paid from | Implementation assumption |
 | Agent resolver is a derived key of the agent (`core/resolver`) | Implementation assumption |
 | `payment_channel` ids, fields and validation from the payment-channels registry | Implementation assumption |
 
