@@ -195,65 +195,64 @@ export interface CurrencyInfo {
   decimals: number;
 }
 
-/** Display names; the registry carries only codes. */
-const NAMES: Record<string, string> = {
-  AOA: "Angolan Kwanza",
-  BIF: "Burundian Franc",
-  BWP: "Botswana Pula",
-  DZD: "Algerian Dinar",
-  EGP: "Egyptian Pound",
-  ETB: "Ethiopian Birr",
-  GBP: "British Pound",
-  INR: "Indian Rupee",
-  KES: "Kenyan Shilling",
-  LSL: "Lesotho Loti",
-  LYD: "Libyan Dinar",
-  MAD: "Moroccan Dirham",
-  MUR: "Mauritian Rupee",
-  MWK: "Malawian Kwacha",
-  MZN: "Mozambican Metical",
-  NAD: "Namibian Dollar",
-  NGN: "Nigerian Naira",
-  PKR: "Pakistani Rupee",
-  RWF: "Rwandan Franc",
-  SDG: "Sudanese Pound",
-  SSP: "South Sudanese Pound",
-  SZL: "Swazi Lilangeni",
-  TND: "Tunisian Dinar",
-  TZS: "Tanzanian Shilling",
-  UGX: "Ugandan Shilling",
-  USD: "US Dollar",
-  ZAR: "South African Rand",
-  ZMW: "Zambian Kwacha",
+// Names come from CLDR via Intl; the registry carries only codes. Hermes
+// gets Intl.DisplayNames from the polyfill loaded in src/polyfills.ts.
+const currencyNames = new Intl.DisplayNames(["en"], { type: "currency", fallback: "code" });
+const regionNames = new Intl.DisplayNames(["en"], { type: "region", fallback: "code" });
+
+/** A display name, or the code itself when Intl can't name it. */
+function nameOf(names: Intl.DisplayNames, code: string): string {
+  try {
+    return names.of(code) ?? code;
+  } catch {
+    return code; // not a well-formed code
+  }
+}
+
+/**
+ * The region a currency used in several countries is shown under: its issuer,
+ * or the CLDR region of its monetary union, rather than whichever country the
+ * registry happens to list first.
+ */
+const HOME: Record<string, string> = {
+  ANG: "CW", AUD: "AU", CHF: "CH", DKK: "DK", EUR: "EU", GBP: "GB", ILS: "IL", MAD: "MA", NOK: "NO", NZD: "NZ",
+  USD: "US", ZAR: "ZA",
+  // UN M49 regions: Middle Africa, Caribbean, Western Africa, Polynesia.
+  XAF: "017", XCD: "029", XOF: "011", XPF: "061",
 };
 
-const COUNTRIES: Record<string, string> = {
-  AO: "Angola", BI: "Burundi", BW: "Botswana", DZ: "Algeria", EG: "Egypt", ET: "Ethiopia",
-  GB: "United Kingdom", IN: "India", KE: "Kenya", LS: "Lesotho", LY: "Libya", MA: "Morocco",
-  MU: "Mauritius", MW: "Malawi", MZ: "Mozambique", NA: "Namibia", NG: "Nigeria", PK: "Pakistan",
-  RW: "Rwanda", SD: "Sudan", SS: "South Sudan", SZ: "Eswatini", TN: "Tunisia", TZ: "Tanzania",
-  UG: "Uganda", US: "United States", ZA: "South Africa", ZM: "Zambia",
-};
+/** Currencies whose minor units exist but aren't used day to day. */
+const WHOLE_UNITS = new Set(["COP", "IDR", "IQD", "IRR", "KES", "KHR", "LAK", "LBP", "MMK", "MWK", "NGN", "SYP", "TZS", "UZS"]);
 
-/** Currencies whose minor units aren't used day to day. */
-const WHOLE_UNITS = new Set(["BIF", "KES", "MWK", "NGN", "RWF", "TZS", "UGX"]);
+/** ISO 4217 minor units, unless they aren't used day to day. */
+function decimalsOf(code: string): number {
+  if (WHOLE_UNITS.has(code)) return 0;
+  try {
+    return new Intl.NumberFormat("en", { style: "currency", currency: code }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2; // not an ISO 4217 code
+  }
+}
 
-function flagOf(country: string): string {
-  if (!/^[A-Z]{2}$/.test(country)) return "🏳️";
-  return String.fromCodePoint(...[...country].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
+/** A region's flag, or a globe for multi-country regions that have none. */
+function flagOf(region: string): string {
+  if (/^\d{3}$/.test(region)) return region === "029" ? "🌎" : region === "061" ? "🌏" : "🌍";
+  if (!/^[A-Z]{2}$/.test(region)) return "🏳️";
+  return String.fromCodePoint(...[...region].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
 }
 
 function buildCurrencies(): CurrencyInfo[] {
   const byCode = new Map<string, CurrencyInfo>();
   for (const s of registry.values()) {
     if (!allowed(s) || byCode.has(s.network.currency)) continue;
-    const { currency: code, country } = s.network;
+    const code = s.network.currency;
+    const region = HOME[code] ?? s.network.country;
     byCode.set(code, {
       code,
-      name: NAMES[code] ?? code,
-      country: COUNTRIES[country] ?? country,
-      flag: flagOf(country),
-      decimals: WHOLE_UNITS.has(code) ? 0 : 2,
+      name: nameOf(currencyNames, code),
+      country: nameOf(regionNames, region),
+      flag: flagOf(region),
+      decimals: decimalsOf(code),
     });
   }
   // Currencies with real payment rails first, then cash-only ones.
@@ -268,10 +267,10 @@ export function currencyInfo(code: CurrencyCode): CurrencyInfo {
   return (
     CURRENCIES.find((c) => c.code === code) ?? {
       code,
-      name: NAMES[code] ?? code,
+      name: nameOf(currencyNames, code),
       country: "",
       flag: "🏳️",
-      decimals: WHOLE_UNITS.has(code) ? 0 : 2,
+      decimals: decimalsOf(code),
     }
   );
 }

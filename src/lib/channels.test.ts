@@ -1,4 +1,4 @@
-import { channelInfo, channelsForCurrency, CURRENCIES, describeDetails, detailsComplete, validateDetails } from "./channels";
+import { channelInfo, channelsForCurrency, CURRENCIES, currencyInfo, describeDetails, detailsComplete, validateDetails } from "./channels";
 
 describe("channels", () => {
   it("uses versioned registry ids on the wire", () => {
@@ -36,7 +36,32 @@ describe("channels", () => {
   });
 
   it("lists currencies with real payment rails first", () => {
-    expect(CURRENCIES[0].code).toBe("KES");
+    const rails = CURRENCIES.map((c) => channelsForCurrency(c.code).some((ch) => ch.group !== "cash"));
+    expect(rails[0]).toBe(true);
+    expect(rails.indexOf(false)).toBeGreaterThan(0);
+    expect(rails.slice(rails.indexOf(false))).not.toContain(true);
     expect(CURRENCIES.find((c) => c.code === "KES")?.flag).toBe("🇰🇪");
+  });
+
+  it("names every registry currency and its country", () => {
+    const unnamed = CURRENCIES.filter((c) => c.name === c.code || /^([A-Z]{2}|\d{3})$/.test(c.country));
+    expect(unnamed.map((c) => c.code)).toEqual([]);
+    expect(currencyInfo("KES")).toMatchObject({ name: "Kenyan Shilling", country: "Kenya", decimals: 0 });
+  });
+
+  it("shows shared currencies under their issuer or union", () => {
+    expect(currencyInfo("ZAR")).toMatchObject({ country: "South Africa", flag: "🇿🇦" });
+    expect(currencyInfo("EUR")).toMatchObject({ country: "European Union", flag: "🇪🇺" });
+    expect(currencyInfo("XOF")).toMatchObject({ country: "Western Africa", flag: "🌍" });
+  });
+
+  it("uses ISO minor units", () => {
+    expect(currencyInfo("JPY").decimals).toBe(0);
+    expect(currencyInfo("KWD").decimals).toBe(3);
+    expect(currencyInfo("EUR").decimals).toBe(2);
+  });
+
+  it("falls back to the code for currencies Intl can't name", () => {
+    expect(currencyInfo("usdb")).toMatchObject({ name: "usdb", decimals: 2 });
   });
 });
