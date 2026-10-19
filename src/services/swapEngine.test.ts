@@ -9,22 +9,25 @@ jest.mock("@react-native-async-storage/async-storage", () => {
 jest.mock("./secure", () => ({
   getSecret: jest.fn(async () => "cc".repeat(32)), setSecret: jest.fn(async () => undefined),
 }));
-jest.mock("./wallet", () => ({ findHtlc: jest.fn() }));
+jest.mock("./wallet", () => ({ findHtlc: jest.fn(), claimHtlc: jest.fn(async () => undefined) }));
 jest.mock("./nostr", () => ({
   query: jest.fn(async () => []),
   publish: jest.fn(async (event) => event),
+  publishAll: jest.fn(async () => undefined),
+  subscribe: jest.fn(() => () => undefined), resetPool: jest.fn(),
   sign: jest.fn((template, sk) => require("nostr-tools/pure").finalizeEvent(template, sk)),
 }));
 jest.mock("../store/agent", () => ({}));
 jest.mock("../store/session", () => ({}));
-jest.mock("../store/wallet", () => ({}));
+jest.mock("../store/wallet", () => ({ useWallet: { getState: () => ({ refresh: async () => undefined }) } }));
 
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import { actionTemplate, rootTemplate } from "../protocol/events";
 import { SWAP_PROFILE } from "../protocol/constants";
 import { useSwaps, hydrateSwaps, persistPaymentBindings, swapState } from "../store/swaps";
-import type { KeyRing } from "../lib/keys";
-import { escalateUnconfirmedPayment, signedRecord, verifyIncomingLock } from "./swapEngine";
+import { htlcPreimage, paymentHashOf, type KeyRing } from "../lib/keys";
+import { escalateUnconfirmedPayment, onEngineChange, signedRecord, startEngine, stopEngine, verifyIncomingLock } from "./swapEngine";
+import * as nostr from "./nostr";
 import * as wallet from "./wallet";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { encryptedSwapStorage } from "./swapStorage";
@@ -205,3 +208,45 @@ it("opens a timeout dispute for the fiat sender once confirmation can no longer 
   expect(st.dispute).toMatchObject({ by: customer, class: "timeout", preStatus: "fiat_sent" });
   expect(await escalateUnconfirmedPayment(id, customerRing)).toBe(false);
 });
+
+/** Run the engine for `ring` until it goes quiet. */
+async function runEngine(ring: KeyRing) {
+  Object.assign(globalThis, { __DEV__: false });
+  let finished!: () => void;
+  const done = new Promise<void>((resolve) => { finished = resolve; });
+  const unsubscribe = onEngineChange(finished);
+  const timeout = setTimeout(finished, 1000);
+  try {
+    startEngine(ring);
+    await done;
+  } finally {
+    unsubscribe(); clearTimeout(timeout); stopEngine();
+  }
+}
+
+function fromAgent(id: string, body: PayloadBody) {
+  useSwaps.getState().addInbox({ id: String(serial++), from: agent, to: customer, createdAt: 100,
+    coordination: id, kind: "payload", payload: { v: 1, profile: SWAP_PROFILE, coordination: id,
+      participants: [agent, customer], commitment_scheme: "sha256-bytes@1", ...body } as SwapPayload });
+}
+
+it("still claims a released preimage while the swap is disputed", async () => {
+  const id = paidSwap();
+  const st = swapState(useSwaps.getState().records[id]);
+  useSwaps.getState().addActions(id, [finalizeEvent(actionTemplate(id, st.tip, "core/open_dispute", { class: "bitcoin_not_released" }, [], 800), customerSk)]);
+  const preimage = "dd".repeat(32);
+  const lockHash = paymentHashOf(preimage);
+  fromAgent(id, { type: "accept", payment_hash: lockHash });
+  fromAgent(id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
+  fromAgent(id, { type: "release", preimage });
+  jest.spyOn(Date, "now").mockReturnValue(1000_000);
+  jest.mocked(wallet.findHtlc).mockResolvedValue({ id: "in", amountSats: 1000n,
+    htlc: { paymentHash: lockHash, status: "waiting", expiresAt: 14400 } } as wallet.WalletTx);
+  await runEngine(customerRing);
+  expect(wallet.claimHtlc).toHaveBeenCalledWith(preimage);
+  const rec = useSwaps.getState().records[id];
+  expect(rec.local.claimedAt).toBeDefined();
+  // The chain stays frozen: claiming is a wallet step, not a protocol action.
+  expect(swapState(rec).disputed).toBe(true);
+});
+

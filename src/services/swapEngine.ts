@@ -33,6 +33,7 @@ import {
 } from "../protocol/payloads";
 import {
   bitcoinProvider,
+  bitcoinRecipient,
   fiatReceiver,
   fiatSender,
   isTerminal,
@@ -335,7 +336,8 @@ async function duty(id: string): Promise<boolean> {
   const st = swapState(rec);
   const { root } = st;
   const t = now();
-  if (st.forked || st.disputed) return false;
+  // A frozen chain stops new decisions, not a claim the provider already made possible.
+  if (st.forked || st.disputed) return claimReleased(id, ring);
   if (await escalateUnconfirmedPayment(id, ring)) return true;
 
   const iProvide = bitcoinProvider(root) === me;
@@ -521,6 +523,22 @@ export function signedRecord(id: string): string {
     actions: rec.actions,
     messages: rec.inbox.filter((i) => i.event && i.payload?.type !== "release").map((i) => i.event),
   });
+}
+
+/**
+ * Bitcoin recipient: claim with a preimage the provider released. Releasing it
+ * was the provider's own decision, so claiming is safe even while the chain is
+ * disputed or forked; waiting could let the lock expire back to the provider.
+ */
+async function claimReleased(id: string, ring: KeyRing): Promise<boolean> {
+  const rec = record(id);
+  const st = swapState(rec);
+  if (rec.local.claimedAt || bitcoinRecipient(st.root) !== ring.identity.pk) return false;
+  const release = payloadFrom(rec, bitcoinProvider(st.root), "release");
+  const hash = lockHash(rec, st);
+  if (!release || !hash || paymentHashOf(release.preimage) !== hash) return false;
+  await claim(id, release.preimage, hash);
+  return true;
 }
 
 async function claim(id: string, preimage: string, hash: string) {
