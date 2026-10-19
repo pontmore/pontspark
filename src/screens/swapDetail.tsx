@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useMe, useNow, useSwap } from "../hooks";
 import { channelInfo, describeDetails } from "../lib/channels";
+import { friendlyError } from "../lib/errors";
 import { formatDecimal, formatSats } from "../lib/money";
 import { swapProfit } from "../lib/earnings";
 import { countdown, describeSwap, shortPk, timeAgo } from "../lib/swapView";
@@ -267,7 +268,7 @@ export function SwapDetailScreen() {
 
       {rec.local.lastError && !view.done && (
         <Notice tone="warning" title="Retrying" action={<Button small kind="secondary" title="Retry now" onPress={() => engine.schedule(id)} />}>
-          {rec.local.lastError}
+          {friendlyError(rec.local.lastError)}
         </Notice>
       )}
 
@@ -334,7 +335,7 @@ export function SwapDetailScreen() {
       {payerHistory && st.status === "fiat_sent" && !st.disputed && (
         <Notice tone={payerHistory.account ? "info" : "warning"} title={payerHistory.account ? "Known paying account" : "First payment from this account"}>
           {payerHistory.account
-            ? `${them} has completed ${payerHistory.account.swaps} ${payerHistory.account.swaps === 1 ? "swap" : "swaps"} with you from ${payerHistory.payer}, since ${new Date(payerHistory.account.firstAt * 1000).toLocaleDateString()}.`
+            ? `${them} has completed ${payerHistory.account.swaps} ${payerHistory.account.swaps === 1 ? "swap" : "swaps"} with you from ${payerHistory.payer}, since ${new Date(payerHistory.account.firstAt * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}.`
             : `${them} hasn't paid you from ${payerHistory.payer} before${payerHistory.otherAccounts ? `, though they have from ${payerHistory.otherAccounts} other ${payerHistory.otherAccounts === 1 ? "account" : "accounts"}` : ""}. Check the money came from that account, not from someone else paying on their behalf.`}
         </Notice>
       )}

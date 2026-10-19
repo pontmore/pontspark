@@ -13,3 +13,15 @@ export function errorText(e: unknown): string {
   }
   return String(e);
 }
+
+/**
+ * Copy for a failed background step. The engine's own messages are already
+ * sentences; wallet and network failures read like logs, so name the problem
+ * instead of echoing them.
+ */
+export function friendlyError(raw: string): string {
+  if (/dns|network|timed? ?out|connect|relay|offline|unreachable/i.test(raw)) return "Can't reach the network. Retrying automatically.";
+  if (/insufficient|not enough funds|balance/i.test(raw)) return "Not enough bitcoin in the wallet for this step.";
+  if (/^SdkError\b|\bError\.\w+/.test(raw)) return "The wallet couldn't finish this step. Retrying automatically.";
+  return raw;
+}
