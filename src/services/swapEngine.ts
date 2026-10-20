@@ -356,6 +356,13 @@ export async function closeOverdueSwap(id: string, ring: KeyRing = k()): Promise
   return true;
 }
 
+/** A payout hash that is some swap's lock, or another swap's payout, must never be paid. */
+function payoutHashInUse(id: string, hash: string): boolean {
+  const { paymentBindings, records } = useSwaps.getState();
+  return !!paymentBindings[hash] || Object.values(records).some((r) => r.id !== id &&
+    r.inbox.some((i) => i.payload?.type === "payout_invoice" && i.payload.payment_hash === hash));
+}
+
 /**
  * Settlement once the lock is gone. A release authorized after the lock expired
  * can't be claimed, so the recipient asks for a direct payment and the provider
@@ -379,10 +386,9 @@ export async function settleDirectly(id: string, ring: KeyRing = k()): Promise<b
     if (lock?.htlc?.status !== "returned") return null;
     const invoice = payloadFrom(rec, recipient, "payout_invoice");
     if (!invoice) return false;
-    if (invoice.payment_hash === hash || !useSwaps.getState().bindPayment(id, invoice.payment_hash)) {
+    if (invoice.payment_hash === hash || payoutHashInUse(id, invoice.payment_hash)) {
       throw new Error("Payout invoice is already bound to another payment");
     }
-    await persistPaymentBindings();
     let paid = await wallet.findHtlc(invoice.payment_hash, "out");
     if (!paid) {
       // A payout we started may still be on its way: wait for it rather than pay twice.
@@ -413,8 +419,6 @@ export async function settleDirectly(id: string, ring: KeyRing = k()): Promise<b
   const sent = payloadFrom(rec, me, "payout_invoice");
   if (!sent) {
     const invoice = await wallet.payoutInvoice(amount, `Pontspark swap ${id.slice(0, 8)}`);
-    if (!useSwaps.getState().bindPayment(id, invoice.paymentHash)) throw new Error("Payout invoice is already bound to another payment");
-    await persistPaymentBindings();
     await send(id, { type: "payout_invoice", bolt11: invoice.bolt11, payment_hash: invoice.paymentHash });
     return true;
   }

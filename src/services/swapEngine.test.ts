@@ -342,6 +342,8 @@ describe("settling directly once the lock returned", () => {
     const authorized = finalizeEvent(actionTemplate(root.id, confirmed.id, "core/authorize_settlement", undefined, [], 900), agentSk);
     useSwaps.getState().addActions(root.id, [accept, secure, sent, confirmed, authorized]);
     const lockHash = paymentHashOf(htlcPreimage(agentSk, root.id));
+    // As on a phone: verifying the lock bound its hash to this swap.
+    expect(useSwaps.getState().bindPayment(root.id, lockHash)).toBe(true);
     fromAgent(root.id, { type: "accept", payment_hash: lockHash });
     fromAgent(root.id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
     fromAgent(root.id, { type: "release", preimage: htlcPreimage(agentSk, root.id) });
@@ -414,6 +416,17 @@ describe("settling directly once the lock returned", () => {
     await runEngine(agentRing);
     expect(wallet.payHoldInvoice).not.toHaveBeenCalled();
     expect(swapState(useSwaps.getState().records[id]).status).toBe("settlement_authorized");
+  });
+
+  it("refuses a payout invoice that reuses another swap's payment hash", async () => {
+    const other = released(agent);
+    const { id, lockHash } = released(agent);
+    message(id, { type: "payout_invoice", bolt11: "lnbc-payout", payment_hash: other.lockHash });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    wallets({ hash: lockHash, status: "returned" });
+    await runEngine(agentRing);
+    expect(wallet.payHoldInvoice).not.toHaveBeenCalled();
+    expect(useSwaps.getState().records[id].local.lastError).toBe("Payout invoice is already bound to another payment");
   });
 
   it("does not pay twice", async () => {
