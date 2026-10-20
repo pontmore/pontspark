@@ -20,6 +20,8 @@ export interface SwapLocal {
   counterpartyName?: string;
   /** Set before an HTLC lock is attempted; the lock itself is idempotent. */
   lockStartedAt?: number;
+  /** When a direct payout (settlement after the lock returned) was started. */
+  payoutStartedAt?: number;
   lockTxId?: string;
   claimedAt?: number;
   releasedAt?: number;

@@ -41,6 +41,11 @@ export type PayloadBody =
   | { type: "fiat_sent"; reference: string }
   | { type: "release"; preimage: string }
   | { type: "claimed" }
+  /**
+   * From the bitcoin recipient once settlement is authorized but the lock has
+   * returned: a plain invoice the provider pays directly instead.
+   */
+  | { type: "payout_invoice"; bolt11: string; payment_hash: string }
   /** Why the agent declined; private so the reasons never appear in public events. */
   | { type: "declined"; reasons: string[] };
 
@@ -131,6 +136,7 @@ function validPayload(v: unknown, root: string, from: string, to: string): v is 
     case "fiat_sent": return string(v.reference);
     case "release": return hex32(v.preimage);
     case "claimed": return true;
+    case "payout_invoice": return string(v.bolt11) && v.bolt11.length > 0 && hex32(v.payment_hash);
     case "declined": return Array.isArray(v.reasons) && v.reasons.every(string);
     default: return false;
   }

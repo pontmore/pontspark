@@ -356,6 +356,77 @@ export async function closeOverdueSwap(id: string, ring: KeyRing = k()): Promise
   return true;
 }
 
+/**
+ * Settlement once the lock is gone. A release authorized after the lock expired
+ * can't be claimed, so the recipient asks for a direct payment and the provider
+ * pays it from the bitcoin that came back. Returns null while the lock still
+ * decides settlement, otherwise whether a step was taken.
+ */
+export async function settleDirectly(id: string, ring: KeyRing = k()): Promise<boolean | null> {
+  const rec = record(id);
+  const st = swapState(rec);
+  const { root } = st;
+  const me = ring.identity.pk;
+  if (st.status !== "settlement_authorized" || st.forked || st.disputed || rec.local.claimedAt) return null;
+  const hash = lockHash(rec, st);
+  if (!hash) return null;
+  const amount = BigInt(root.terms.bitcoin.amount);
+  const recipient = bitcoinRecipient(root);
+
+  if (bitcoinProvider(root) === me) {
+    // Only a returned lock rules out the recipient claiming it as well.
+    const lock = await wallet.findHtlc(hash, "out");
+    if (lock?.htlc?.status !== "returned") return null;
+    const invoice = payloadFrom(rec, recipient, "payout_invoice");
+    if (!invoice) return false;
+    if (invoice.payment_hash === hash || !useSwaps.getState().bindPayment(id, invoice.payment_hash)) {
+      throw new Error("Payout invoice is already bound to another payment");
+    }
+    await persistPaymentBindings();
+    let paid = await wallet.findHtlc(invoice.payment_hash, "out");
+    if (!paid) {
+      // A payout we started may still be on its way: wait for it rather than pay twice.
+      const started = rec.local.payoutStartedAt;
+      if (started && now() - started < LOCK_SETTLE_SECS) return false;
+      useSwaps.getState().patchLocal(id, { payoutStartedAt: now() });
+      try {
+        paid = await wallet.payHoldInvoice({ bolt11: invoice.bolt11, amountSats: amount, paymentHash: invoice.payment_hash, idempotencySeed: `pontmore/payout/${id}` });
+      } catch (e) {
+        // Refused outright, nothing left the wallet: the next try needn't wait.
+        if (!(await wallet.findHtlc(invoice.payment_hash, "out").catch(() => null))) useSwaps.getState().patchLocal(id, { payoutStartedAt: undefined });
+        throw e;
+      }
+      void useWallet.getState().refresh();
+    }
+    if (paid.status === "failed") throw new Error("The direct payment didn't go through");
+    if (paid.status !== "complete") return false;
+    if (rec.role !== "agent") return false;
+    await settle(id, ring);
+    return true;
+  }
+
+  if (recipient !== me) return null;
+  const lock = await wallet.findHtlc(hash, "in");
+  if (lock?.htlc?.status === "released") return null;
+  const gone = lock ? lock.htlc?.status === "returned" || (lock.htlc?.expiresAt ?? 0) <= now() : now() > htlcExpiry(st);
+  if (!gone) return null;
+  const sent = payloadFrom(rec, me, "payout_invoice");
+  if (!sent) {
+    const invoice = await wallet.payoutInvoice(amount, `Pontspark swap ${id.slice(0, 8)}`);
+    if (!useSwaps.getState().bindPayment(id, invoice.paymentHash)) throw new Error("Payout invoice is already bound to another payment");
+    await persistPaymentBindings();
+    await send(id, { type: "payout_invoice", bolt11: invoice.bolt11, payment_hash: invoice.paymentHash });
+    return true;
+  }
+  const paid = await wallet.findHtlc(sent.payment_hash, "in");
+  if (paid?.status !== "complete") return false;
+  useSwaps.getState().patchLocal(id, { claimedAt: now() });
+  void useWallet.getState().refresh();
+  if (rec.role === "agent") await settle(id, ring);
+  else await send(id, { type: "claimed" });
+  return true;
+}
+
 /** Perform at most one duty. Returns true if something was done. */
 async function duty(id: string): Promise<boolean> {
   const ring = k();
@@ -368,6 +439,8 @@ async function duty(id: string): Promise<boolean> {
   if (st.forked || st.disputed) return claimReleased(id, ring);
   if (await closeOverdueSwap(id, ring)) return true;
   if (await escalateUnconfirmedPayment(id, ring)) return true;
+  const direct = await settleDirectly(id, ring);
+  if (direct !== null) return direct;
 
   const iProvide = bitcoinProvider(root) === me;
   const direction = root.terms.direction;

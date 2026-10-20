@@ -9,7 +9,7 @@ jest.mock("@react-native-async-storage/async-storage", () => {
 jest.mock("./secure", () => ({
   getSecret: jest.fn(async () => "cc".repeat(32)), setSecret: jest.fn(async () => undefined),
 }));
-jest.mock("./wallet", () => ({ findHtlc: jest.fn(), payHoldInvoice: jest.fn(), claimHtlc: jest.fn(async () => undefined) }));
+jest.mock("./wallet", () => ({ findHtlc: jest.fn(), payHoldInvoice: jest.fn(), payoutInvoice: jest.fn(), claimHtlc: jest.fn(async () => undefined) }));
 jest.mock("./nostr", () => ({
   query: jest.fn(async () => []),
   publish: jest.fn(async (event) => event),
@@ -319,6 +319,111 @@ describe("a lock that returned", () => {
     expect(await closeOverdueSwap(id, agentRing)).toBe(false);
     jest.mocked(wallet.findHtlc).mockResolvedValue(null);
     expect(await closeOverdueSwap(id, agentRing)).toBe(false);
+  });
+});
+
+describe("settling directly once the lock returned", () => {
+  const payoutHash = "ee".repeat(32);
+
+  /** A fiat_to_btc swap whose release was authorized, seen from `me`. */
+  function released(me: string) {
+    const root = finalizeEvent(rootTemplate({
+      agent, customer, escrow, resolver, descriptorId: "bb".repeat(32),
+      createdAt: 100 + serial++, expiresAt: 700,
+      terms: { direction: "fiat_to_btc", fiat: { currency: "KES", amount: "100" },
+        bitcoin: { unit: "sat", network: "spark", amount: "1000" }, payment_channel: "cash_ke_kes@2",
+        deadlines: { fiat_pay_by: 4500, fiat_confirm_by: 10800 } },
+    }), customerSk);
+    useSwaps.getState().upsertRoot(root, me);
+    const accept = finalizeEvent(actionTemplate(root.id, root.id, "core/accept", undefined, [], 500), agentSk);
+    const secure = finalizeEvent(actionTemplate(root.id, accept.id, "core/secure", undefined, [], 600), escrowSk);
+    const sent = finalizeEvent(actionTemplate(root.id, secure.id, "swap/fiat_sent", { payment_reference: "ref-1" }, [], 700), customerSk);
+    const confirmed = finalizeEvent(actionTemplate(root.id, sent.id, "swap/fiat_confirmed", { payment_reference: "ref-1" }, [], 800), agentSk);
+    const authorized = finalizeEvent(actionTemplate(root.id, confirmed.id, "core/authorize_settlement", undefined, [], 900), agentSk);
+    useSwaps.getState().addActions(root.id, [accept, secure, sent, confirmed, authorized]);
+    const lockHash = paymentHashOf(htlcPreimage(agentSk, root.id));
+    fromAgent(root.id, { type: "accept", payment_hash: lockHash });
+    fromAgent(root.id, { type: "locked", payment_hash: lockHash, amount: "1000", expires_at: 14400 });
+    fromAgent(root.id, { type: "release", preimage: htlcPreimage(agentSk, root.id) });
+    expect(swapState(useSwaps.getState().records[root.id]).status).toBe("settlement_authorized");
+    return { id: root.id, lockHash };
+  }
+  function wallets(lock: { hash: string; status: "waiting" | "released" | "returned"; expiresAt?: number }, payout?: wallet.WalletTx["status"]) {
+    jest.mocked(wallet.findHtlc).mockImplementation(async (hash) => {
+      if (hash === lock.hash) return { id: "lock", amountSats: 1000n, status: "pending", timestamp: 900,
+        htlc: { paymentHash: lock.hash, status: lock.status, expiresAt: lock.expiresAt ?? 14400 } } as wallet.WalletTx;
+      if (hash === payoutHash && payout) return { id: "payout", amountSats: 1000n, status: payout, timestamp: 20000,
+        htlc: { paymentHash: payoutHash, status: "released", expiresAt: 0 } } as wallet.WalletTx;
+      return null;
+    });
+  }
+
+  it("has the recipient ask for a direct payment once its lock can't be claimed", async () => {
+    const { id, lockHash } = released(customer);
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    wallets({ hash: lockHash, status: "returned" });
+    jest.mocked(wallet.payoutInvoice).mockResolvedValue({ bolt11: "lnbc-payout", paymentHash: payoutHash });
+    await runEngine(customerRing);
+    const rec = useSwaps.getState().records[id];
+    expect(wallet.payoutInvoice).toHaveBeenCalledWith(1000n, expect.any(String));
+    expect(rec.inbox.find((i) => i.from === customer && i.payload?.type === "payout_invoice")?.payload)
+      .toMatchObject({ bolt11: "lnbc-payout", payment_hash: payoutHash });
+    expect(wallet.claimHtlc).not.toHaveBeenCalled();
+    expect(rec.local.lastError).toBeUndefined();
+  });
+
+  it("keeps claiming the lock while it can still be claimed", async () => {
+    const { id, lockHash } = released(customer);
+    jest.spyOn(Date, "now").mockReturnValue(5000_000);
+    wallets({ hash: lockHash, status: "waiting" });
+    await runEngine(customerRing);
+    expect(wallet.payoutInvoice).not.toHaveBeenCalled();
+    expect(useSwaps.getState().records[id].inbox.some((i) => i.payload?.type === "payout_invoice")).toBe(false);
+  });
+
+  it("has the recipient report the claim once the direct payment arrives", async () => {
+    const { id, lockHash } = released(customer);
+    useSwaps.getState().addInbox({ id: String(serial++), from: customer, to: agent, createdAt: 100,
+      coordination: id, kind: "payload", payload: { v: 1, profile: SWAP_PROFILE, coordination: id,
+        participants: [agent, customer], commitment_scheme: "sha256-bytes@1", type: "payout_invoice", bolt11: "lnbc-payout", payment_hash: payoutHash } as SwapPayload });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    wallets({ hash: lockHash, status: "returned" }, "complete");
+    await runEngine(customerRing);
+    const rec = useSwaps.getState().records[id];
+    expect(rec.local.claimedAt).toBeDefined();
+    expect(rec.inbox.some((i) => i.from === customer && i.payload?.type === "claimed")).toBe(true);
+  });
+
+  it("has the provider pay the invoice from the returned lock and settle", async () => {
+    const { id, lockHash } = released(agent);
+    message(id, { type: "payout_invoice", bolt11: "lnbc-payout", payment_hash: payoutHash });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    wallets({ hash: lockHash, status: "returned" });
+    jest.mocked(wallet.payHoldInvoice).mockResolvedValue({ id: "payout", amountSats: 1000n, status: "complete", timestamp: 20000 } as wallet.WalletTx);
+    await runEngine(agentRing);
+    expect(wallet.payHoldInvoice).toHaveBeenCalledWith(expect.objectContaining({ bolt11: "lnbc-payout", amountSats: 1000n, paymentHash: payoutHash }));
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("settled");
+  });
+
+  it("never pays directly while the recipient could still claim the lock", async () => {
+    const { id, lockHash } = released(agent);
+    message(id, { type: "payout_invoice", bolt11: "lnbc-payout", payment_hash: payoutHash });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    // Expired by the clock but not yet returned: a claim could still land.
+    wallets({ hash: lockHash, status: "waiting", expiresAt: 14400 });
+    await runEngine(agentRing);
+    expect(wallet.payHoldInvoice).not.toHaveBeenCalled();
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("settlement_authorized");
+  });
+
+  it("does not pay twice", async () => {
+    const { id, lockHash } = released(agent);
+    message(id, { type: "payout_invoice", bolt11: "lnbc-payout", payment_hash: payoutHash });
+    jest.spyOn(Date, "now").mockReturnValue(20000_000);
+    wallets({ hash: lockHash, status: "returned" }, "pending");
+    await runEngine(agentRing);
+    expect(wallet.payHoldInvoice).not.toHaveBeenCalled();
+    expect(swapState(useSwaps.getState().records[id]).status).toBe("settlement_authorized");
   });
 });
 

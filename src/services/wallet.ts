@@ -259,6 +259,14 @@ export async function receiveInvoice(amountSats: bigint | undefined, description
   return res.paymentRequest;
 }
 
+/** A plain invoice paid straight to us, with the payment hash to watch for it by. */
+export async function payoutInvoice(amountSats: bigint, description: string): Promise<{ bolt11: string; paymentHash: string }> {
+  const bolt11 = await receiveInvoice(amountSats, description);
+  const input = await (await connect()).parse(bolt11);
+  if (!InputType.Bolt11Invoice.instanceOf(input)) throw new Error("The payout invoice isn't a Lightning invoice");
+  return { bolt11, paymentHash: input.inner[0].paymentHash };
+}
+
 export async function sparkAddress(): Promise<string> {
   const s = await connect();
   const res = await s.receivePayment({ paymentMethod: new ReceivePaymentMethod.SparkAddress() });
